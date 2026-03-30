@@ -1,0 +1,33 @@
+name: primer
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  # Python
+  - python>=3.11
+
+  # Primer design & thermodynamics
+  - primer3-py
+  - primer3
+
+  # R + DECIPHER (primary primer design engine)
+  - r-base>=4.3
+  - bioconductor-decipher
+  - bioconductor-biostrings
+  - r-jsonlite
+  - r-rsqlite
+
+  # Sequence handling
+  - biopython
+
+  # Alignment
+  - mafft
+
+  # In silico PCR / off-target
+  - obitools4
+
+  # BLAST (annotation mapping)
+  - blast
+
+  # Config
+  - pyyaml
