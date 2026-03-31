@@ -1,9 +1,16 @@
+# -- Title 
+header: 
+  main: "Primers for"
+  coloured: "Petaurus breviceps"
+  last: " * Full Mammel off target"
+  subtitle: "Primer binding assessment"
+
 # ── Primer size and amplicon constraints ──────────────────────────────────────
 design:
   min_primer_length: 18        # Shortest primer to consider (bp)
   max_primer_length: 25        # Longest primer to consider (bp)
   min_amplicon_length: 90      # Shortest acceptable amplicon (bp); used in design, expand, and on-target binding
-  max_amplicon_length: 180     # Longest acceptable amplicon (bp); used in design, expand, and on-target binding
+  max_amplicon_length: 300     # Longest acceptable amplicon (bp); used in design, expand, and on-target binding
   optimal_amplicon_length: 130 # Target amplicon size for ranking (bp)
 
 # ── DECIPHER DesignSignatures ─────────────────────────────────────────────────
@@ -11,8 +18,8 @@ decipher:
   min_coverage: 0.8            # Minimum fraction of sequences a primer must bind (0-1)
   resolution: 5                # k-mer size for differentiating amplicon sequences
   max_degeneracy: 128          # Maximum degeneracy (fold) allowed per primer
-  num_primer_sets: 100         # Number of primer pairs returned; increase to explore more regions
-  search_primers: 500          # Candidate primers in initial search; increase for broader coverage
+  num_primer_sets: 1000         # Number of primer pairs returned; increase to explore more regions
+  search_primers: 2000          # Candidate primers in initial search; increase for broader coverage
 
 # ── Thermodynamic filtering ───────────────────────────────────────────────────
 # Applied in Step 2 (validate) and Step 2b (expand). REJECT = removed, FLAG = kept with warning.

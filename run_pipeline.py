@@ -143,7 +143,7 @@ def main():
 
         "report": lambda: run(
             [sys.executable, str(APP_DIR / "generate_report.py"),
-             str(analysis_json), "-o", str(report_html)],
+             str(analysis_json), "-o", str(report_html), "--config", args.config],
             "Step 6: Generate HTML report",
             env=run_env),
     }

@@ -152,7 +152,7 @@ def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
     return "\n".join(lines)
 
 
-def generate_html(data: dict) -> str:
+def generate_html(data: dict, header_cfg: dict | None = None) -> str:
     """Generate the full HTML dashboard."""
     seq_names = data["seq_names"]
     meta = data["meta"]
@@ -163,7 +163,7 @@ def generate_html(data: dict) -> str:
 
     js_data = build_js_data(data, sn, colors)
 
-    # Reference species for title
+    # Reference species for title fallback
     parts = ref_name.split("_")
     if len(parts) >= 3 and parts[1].isdigit():
         ref_species = " ".join(parts[2:]).replace("REF", "").strip()
@@ -171,6 +171,18 @@ def generate_html(data: dict) -> str:
     else:
         ref_species = " ".join(parts[1:]).replace("REF", "").strip()
         ref_acc = parts[0]
+
+    # Header from config or fallback to auto-generated
+    if header_cfg:
+        h_main = header_cfg.get("main", "Primers for")
+        h_coloured = header_cfg.get("coloured", ref_species)
+        h_last = header_cfg.get("last", "")
+        h_subtitle = header_cfg.get("subtitle", "Primer binding assessment")
+    else:
+        h_main = "Primers for"
+        h_coloured = ref_species
+        h_last = ""
+        h_subtitle = "Primer binding assessment"
 
     align_len = meta["alignment_length"]
     n_primer_sets = meta.get("n_primer_sets", len(data.get("primer_sets", [])))
@@ -190,7 +202,7 @@ def generate_html(data: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BLAST MSA · {ref_species} · Primer Analysis</title>
+<title>{h_main} {h_coloured}{h_last}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -423,8 +435,8 @@ def generate_html(data: dict) -> str:
 <!-- HEADER -->
 <div class="header">
   <div>
-    <h1>BLAST MSA · <em style="font-style:italic;color:var(--accent)">{ref_species}</em> Mitogenome</h1>
-    <div class="sub">Primer binding assessment · Marsupial eDNA amplification</div>
+    <h1>{h_main} <em style="font-style:italic;color:var(--accent)">{h_coloured}</em>{h_last}</h1>
+    <div class="sub">{h_subtitle}</div>
   </div>
   <div class="chip-row">
     <div class="chip">Sequences: <b>{len(seq_names)}</b></div>
@@ -1399,6 +1411,7 @@ def main():
     )
     parser.add_argument("json_file", nargs="?", default="blast_vis_data.json", help="Input JSON file")
     parser.add_argument("--output", "-o", default="blast_msa_viz.html", help="Output HTML file")
+    parser.add_argument("--config", "-c", default=None, help="Config YAML for report header")
     args = parser.parse_args()
 
     json_path = Path(args.json_file)
@@ -1409,11 +1422,24 @@ def main():
     with open(json_path) as f:
         data = json.load(f)
 
+    # Load header config if provided
+    header_cfg = None
+    if args.config:
+        try:
+            import yaml
+            cfg_path = Path(args.config)
+            if cfg_path.exists():
+                with open(cfg_path) as f:
+                    raw = yaml.safe_load(f)
+                header_cfg = raw.get("header")
+        except ImportError:
+            pass
+
     print(f"  {data['meta']['n_sequences']} sequences · {data['meta']['alignment_length']} bp alignment")
     print(f"  {data['meta'].get('n_primer_sets', '?')} primer set(s)")
     print("Generating HTML ...")
 
-    html = generate_html(data)
+    html = generate_html(data, header_cfg)
 
     out_path = Path(args.output)
     with open(out_path, "w") as f:
