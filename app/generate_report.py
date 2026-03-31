@@ -53,11 +53,6 @@ def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
     meta = data["meta"]
     genes = data["genes"]
 
-    # 12S region
-    s12 = next((g for g in genes if g["name"] == "12S"), None)
-    s12_start = s12["start"] if s12 else 0
-    s12_end = s12["end"] if s12 else 0
-
     # Build primer_sets JS array
     ps_js = []
     for ps in data["primer_sets"]:
@@ -122,12 +117,21 @@ def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
             "rev_gc": props["rev"]["gc_pct"],
             "fwd_tm": props["fwd"].get("tm", props["fwd"].get("tm_wallace", 0)),
             "rev_tm": props["rev"].get("tm", props["rev"].get("tm_wallace", 0)),
+            "fwd_hairpin": props["fwd"].get("hairpin_dg", 0),
+            "rev_hairpin": props["rev"].get("hairpin_dg", 0),
+            "fwd_homodimer": props["fwd"].get("homodimer_dg", 0),
+            "rev_homodimer": props["rev"].get("homodimer_dg", 0),
+            "heterodimer": props.get("heterodimer_dg", 0),
             "delta_tm": props["delta_tm"],
             "ss": ss,
             "gapped": gc,
             "amplicons": amplicons,
             "hit_summary": hit_summary,
             "ecopcr": ecopcr_js,
+            "properties": {
+                "flags": props.get("flags", []),
+                "status": props.get("status", "PASS"),
+            },
         }
         ps_js.append(ps_obj)
 
@@ -137,13 +141,12 @@ def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
         f"const COLORS = {json.dumps(colors)};",
         f"const GENES = {json.dumps(genes)};",
         f"const ALIGN_LEN = {meta['alignment_length']};",
-        f"const S12_START = {s12_start}, S12_END = {s12_end};",
         f"const MATRIX = {json.dumps(data['matrix'])};",
         f"const ID_VS_REF = {json.dumps(data['id_vs_ref'])};",
         f"const X_POS = {json.dumps(data['sliding_window']['x_positions'])};",
         f"const SLIDING = {json.dumps(data['sliding_window']['data'])};",
         f"const PRIMER_SETS = {json.dumps(ps_js)};",
-        "let activePSIndex = 0;",
+        f"let activePSIndex = {next((i for i, ps in enumerate(ps_js) if any(v is not None for v in ps['amplicons'].values())), 0)};",
         "function PS() { return PRIMER_SETS[activePSIndex]; }",
     ]
     return "\n".join(lines)
@@ -173,9 +176,6 @@ def generate_html(data: dict) -> str:
     n_primer_sets = meta.get("n_primer_sets", len(data.get("primer_sets", [])))
 
     genes = data["genes"]
-    s12 = next((g for g in genes if g["name"] == "12S"), None)
-    s12_start = s12["start"] if s12 else 0
-    s12_end = s12["end"] if s12 else 0
 
     axis_ticks = [0]
     pos = 500
@@ -298,33 +298,6 @@ def generate_html(data: dict) -> str:
   .leg-swatch {{ width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }}
   .track-container {{ position: relative; }}
 
-  /* ── ZOOM TRACK ── */
-  .zoom-track-wrap {{ position: relative; }}
-  .zoom-track {{
-    height: 48px; background: var(--bg3); border-radius: 6px;
-    border: 1px solid var(--border); position: relative; overflow: visible;
-  }}
-  .zoom-gene-fill {{
-    position: absolute; top: 0; bottom: 0; border-radius: 4px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700; color: rgba(0,0,0,0.75);
-  }}
-  .zoom-primer {{
-    position: absolute; top: 8px; bottom: 8px; border-radius: 3px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 9px; font-weight: 700; letter-spacing: 0.3px; z-index: 3;
-  }}
-  .zoom-amplicon {{
-    position: absolute; top: 0; bottom: 0; background: var(--amplicon);
-    border-left: 2px solid rgba(250,204,21,0.5);
-    border-right: 2px solid rgba(250,204,21,0.5); z-index: 2;
-  }}
-  .zoom-label {{ position: absolute; font-size: 8px; color: var(--muted); top: -18px; }}
-  .zoom-axis {{
-    display: flex; justify-content: space-between; margin-top: 6px;
-    font-size: 9px; color: var(--muted); position: relative;
-  }}
-
   /* ── PRIMER SPECS (inline in card) ── */
   .primer-specs {{ display: flex; flex-direction: column; gap: 16px; }}
   .primer-block {{ border-left: 3px solid var(--primer-fwd); padding-left: 12px; }}
@@ -365,6 +338,9 @@ def generate_html(data: dict) -> str:
   .hit-table td {{ padding: 7px 10px; border-bottom: 1px solid var(--bg3); vertical-align: middle; }}
   .hit-table tr:last-child td {{ border-bottom: none; }}
   .hit-table tr:hover td {{ background: var(--bg3); }}
+  .hit-table tr.species-selected td {{ background: rgba(34,197,94,0.12); }}
+  .hit-table tr.species-selected:hover td {{ background: rgba(34,197,94,0.2); }}
+  .hit-table tr {{ cursor: pointer; user-select: none; }}
   .mm-badge {{
     display: inline-flex; align-items: center; justify-content: center;
     width: 22px; height: 22px; border-radius: 50%; font-size: 11px; font-weight: 700;
@@ -488,7 +464,7 @@ def generate_html(data: dict) -> str:
     <div id="selectedPrimerDetail"></div>
   </div>
   <div class="card">
-    <div class="card-title"><div class="dot" style="background:var(--green)"></div>Amplification Prediction · All Sequences</div>
+    <div class="card-title"><div class="dot" style="background:var(--green)"></div><span id="ampPredTitle">Amplification Prediction · click species to filter primers</span></div>
     <table class="hit-table">
       <thead>
         <tr>
@@ -534,16 +510,6 @@ def generate_html(data: dict) -> str:
       </table>
     </div>
   </div>
-</div>
-
-<!-- Zoomed region track -->
-<div class="card" style="margin-top:14px;">
-  <div class="card-title"><div class="dot" style="background:var(--gold)"></div><span id="zoomTitle">Zoomed Region · Primer binding sites</span></div>
-  <div class="zoom-track-wrap" style="padding-top:24px;" id="zoomWrap">
-    <div class="zoom-track" id="zoomTrack"></div>
-    <div class="zoom-axis" id="zoomAxis"></div>
-  </div>
-  <div id="zoomInfo" style="margin-top:14px;padding:10px 14px;background:var(--bg3);border-radius:6px;font-size:10px;display:flex;gap:24px;flex-wrap:wrap;"></div>
 </div>
 
 <!-- SECTION 2: AMPLICON ALIGNMENT -->
@@ -624,6 +590,21 @@ function gcClamp(seq) {{
   return `${{gc}}/5 (${{tail}})`;
 }}
 
+// ── SPECIES FILTER ──────────────────────────────────────────────────────────
+let selectedSpecies = new Set();
+
+function primerAmplifiesSelected(primerSeq, isFwd) {{
+  if (selectedSpecies.size === 0) return true;
+  return PRIMER_SETS.some(ps => {{
+    if (isFwd ? ps.fwd !== primerSeq : ps.rev !== primerSeq) return false;
+    for (const sp of selectedSpecies) {{
+      const h = ps.hit_summary[sp];
+      if (!h || !h.has_amp) return false;
+    }}
+    return true;
+  }});
+}}
+
 // ── FWD/REV PRIMER TRACKS ────────────────────────────────────────────────────
 // Build unique FWD and REV lists with their gapped positions
 let uniqueFwds = [];  // {{ seq, indices, gapped_start, gapped_end }}
@@ -680,6 +661,32 @@ function syncActivePrimerSet() {{
   if (match >= 0) activePSIndex = match;
 }}
 
+function currentPairMatches() {{
+  if (selectedFwdIdx === null || selectedRevIdx === null) return false;
+  const ps = PS();
+  return ps.fwd === uniqueFwds[selectedFwdIdx].seq && ps.rev === uniqueRevs[selectedRevIdx].seq;
+}}
+
+// Find the best hit_summary data for a given fwd or rev primer across all primer sets
+function bestHitsForPrimer(seq, isFwd) {{
+  // Returns a map of {{ seqName: {{ fwd_mm, rev_mm }} }} from any PS using this primer
+  const result = {{}};
+  PRIMER_SETS.forEach(ps => {{
+    if (isFwd ? ps.fwd !== seq : ps.rev !== seq) return;
+    SEQ_NAMES.forEach(name => {{
+      const h = ps.hit_summary[name];
+      if (!h) return;
+      const prev = result[name];
+      if (isFwd) {{
+        if (!prev || h.fwd_mm < prev.fwd_mm) result[name] = {{ ...result[name], fwd_mm: h.fwd_mm, fwd_has_amp: h.has_amp }};
+      }} else {{
+        if (!prev || h.rev_mm < prev.rev_mm) result[name] = {{ ...result[name], rev_mm: h.rev_mm, rev_has_amp: h.has_amp }};
+      }}
+    }});
+  }});
+  return result;
+}}
+
 function isCompatible(fwdItem, revItem) {{
   // Compatible if: rev starts after fwd ends, amplicon in range, delta Tm ≤ 5
   if (revItem.start <= fwdItem.end) return false;
@@ -727,12 +734,13 @@ function buildPrimerTrack() {{
       const width = Math.max(8, ((f.end - f.start) / ALIGN_LEN) * w);
       const isSelected = fi === selectedFwdIdx;
       const compatible = selRev ? isCompatible(f, selRev) : true;
+      const ampOk = primerAmplifiesSelected(f.seq, true);
 
       const bar = document.createElement('div');
       bar.className = 'primer-bar' + (isSelected ? ' active' : '');
       bar.style.cssText = `left:${{left}}px;width:${{width}}px;top:${{item.row * 16}}px;height:14px;`
-        + (compatible ? `background:${{isSelected ? 'var(--primer-fwd)' : 'rgba(245,158,11,0.6)'}};color:#000;`
-                      : `background:var(--bg4);color:var(--muted);border:1px solid rgba(245,158,11,0.5);`);
+        + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-fwd)' : 'rgba(245,158,11,0.6)'}};color:#000;`
+                               : `background:var(--bg4);color:var(--muted);border:1px solid rgba(245,158,11,0.5);`);
       bar.textContent = width > 30 ? f.seq.substring(0,6)+'…' : '';
       bar.title = `FWD: ${{f.seq}}\nTm: ${{f.tm}}°C · GC: ${{f.gc_pct}}% · ${{f.len}} bp\nUsed by ${{f.indices.length}} pair(s)`;
       bar.addEventListener('click', () => {{
@@ -771,12 +779,13 @@ function buildPrimerTrack() {{
       const width = Math.max(8, ((r.end - r.start) / ALIGN_LEN) * w);
       const isSelected = ri === selectedRevIdx;
       const compatible = selFwd ? isCompatible(selFwd, r) : true;
+      const ampOk = primerAmplifiesSelected(r.seq, false);
 
       const bar = document.createElement('div');
       bar.className = 'primer-bar' + (isSelected ? ' active' : '');
       bar.style.cssText = `left:${{left}}px;width:${{width}}px;top:${{item.row * 16}}px;height:14px;`
-        + (compatible ? `background:${{isSelected ? 'var(--primer-rev)' : 'rgba(236,72,153,0.6)'}};color:#fff;`
-                      : `background:var(--bg4);color:var(--muted);border:1px solid rgba(236,72,153,0.5);`);
+        + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-rev)' : 'rgba(236,72,153,0.6)'}};color:#fff;`
+                               : `background:var(--bg4);color:var(--muted);border:1px solid rgba(236,72,153,0.5);`);
       bar.textContent = width > 30 ? r.seq.substring(0,6)+'…' : '';
       bar.title = `REV: ${{r.seq}}\nTm: ${{r.tm}}°C · GC: ${{r.gc_pct}}% · ${{r.len}} bp\nUsed by ${{r.indices.length}} pair(s)`;
       bar.addEventListener('click', () => {{
@@ -787,6 +796,24 @@ function buildPrimerTrack() {{
       revContainer.appendChild(bar);
     }});
   }});
+}}
+
+function gcClamp(seq) {{
+  const tail = seq.toUpperCase().slice(-5);
+  return [...tail].filter(b => b === 'G' || b === 'C').length;
+}}
+function maxHomopoly(seq) {{
+  let max = 1, run = 1;
+  for (let i = 1; i < seq.length; i++) {{
+    if (seq[i].toUpperCase() === seq[i-1].toUpperCase()) {{ run++; if (run > max) max = run; }}
+    else run = 1;
+  }}
+  return max;
+}}
+function flagColor(val, lo, hi, invert) {{
+  // invert=true means lower is worse (like dG: more negative = worse)
+  if (invert) return val < lo ? 'var(--coral)' : val < hi ? 'var(--gold)' : 'var(--green)';
+  return val >= lo && val <= hi ? 'var(--green)' : 'var(--gold)';
 }}
 
 function buildSelectedDetail() {{
@@ -802,36 +829,66 @@ function buildSelectedDetail() {{
     return;
   }}
 
-  const paired = hasPrimerSet(fwd, rev);
+  const paired = currentPairMatches() && hasPrimerSet(fwd, rev);
   const compatible = isCompatible(fwd, rev);
   const ampLen = rev.end - fwd.start;
   const deltaTm = Math.abs(fwd.tm - rev.tm).toFixed(1);
+  const tmIncompatible = parseFloat(deltaTm) > 5;
   const ps = paired ? PS() : null;
   const ampCount = ps ? Object.values(ps.hit_summary).filter(h => h.has_amp).length : '?';
-  const pairName = ps ? ps.name : (compatible ? 'Custom pair (not in dataset)' : 'Incompatible pair');
+  const pairName = ps ? ps.name : (tmIncompatible ? 'Incompatible pair' : 'Untested pair');
+
+  // Get thermo values from the PS if available, else compute what we can
+  const fHairpin = ps ? ps.fwd_hairpin : '—';
+  const rHairpin = ps ? ps.rev_hairpin : '—';
+  const fHomodimer = ps ? ps.fwd_homodimer : '—';
+  const rHomodimer = ps ? ps.rev_homodimer : '—';
+  const hetero = ps ? ps.heterodimer : '—';
+  const fClamp = gcClamp(fwd.seq);
+  const rClamp = gcClamp(rev.seq);
+  const fHomopoly = maxHomopoly(fwd.seq);
+  const rHomopoly = maxHomopoly(rev.seq);
+
+  const flags = ps ? (ps.properties.flags || []) : [];
+  const hasFlag = f => flags.includes(f);
+
+  function sv(val, unit) {{ return typeof val === 'number' ? val.toFixed(1) + unit : val; }}
+  function flagBg(flagName) {{ return hasFlag(flagName) ? 'background:rgba(245,158,11,0.15);border-radius:4px;padding:1px 4px;' : ''; }}
 
   title.textContent = pairName.replace(/_/g, ' ');
 
   detail.innerHTML = `
-    <div style="margin-bottom:10px;">
+    <div style="margin-bottom:8px;">
       <div class="sel-primer-seq" style="color:var(--primer-fwd)">▶ ${{fwd.seq}}</div>
+      <div class="sel-primer-stats" style="margin:4px 0;">
+        <span class="pstat" style="${{flagBg('')}}"><b>${{fwd.len}}</b> bp</span>
+        <span class="pstat" style="${{flagBg('gc_fwd_out_of_range')}}">GC <b>${{fwd.gc_pct}}%</b></span>
+        <span class="pstat" style="${{flagBg('tm_fwd_out_of_range')}}">Tm <b>${{fwd.tm}}°C</b></span>
+        <span class="pstat" style="${{flagBg('hairpin_fwd')}}">hairpin <b>${{sv(fHairpin, '')}}</b></span>
+        <span class="pstat" style="${{flagBg('homodimer_fwd')}}">homodimer <b>${{sv(fHomodimer, '')}}</b></span>
+        <span class="pstat" style="${{flagBg('homopolymer_fwd')}}">homopoly <b>${{fHomopoly}}</b></span>
+        <span class="pstat" style="${{flagBg('gc_clamp_fwd')}}">3′ GC <b>${{fClamp}}/5</b></span>
+      </div>
+    </div>
+    <div style="margin-bottom:8px;">
       <div class="sel-primer-seq" style="color:var(--primer-rev)">◀ ${{rev.seq}}</div>
+      <div class="sel-primer-stats" style="margin:4px 0;">
+        <span class="pstat" style="${{flagBg('')}}"><b>${{rev.len}}</b> bp</span>
+        <span class="pstat" style="${{flagBg('gc_rev_out_of_range')}}">GC <b>${{rev.gc_pct}}%</b></span>
+        <span class="pstat" style="${{flagBg('tm_rev_out_of_range')}}">Tm <b>${{rev.tm}}°C</b></span>
+        <span class="pstat" style="${{flagBg('hairpin_rev')}}">hairpin <b>${{sv(rHairpin, '')}}</b></span>
+        <span class="pstat" style="${{flagBg('homodimer_rev')}}">homodimer <b>${{sv(rHomodimer, '')}}</b></span>
+        <span class="pstat" style="${{flagBg('homopolymer_rev')}}">homopoly <b>${{rHomopoly}}</b></span>
+        <span class="pstat" style="${{flagBg('gc_clamp_rev')}}">3′ GC <b>${{rClamp}}/5</b></span>
+      </div>
     </div>
-    <div class="sel-primer-stats">
-      <span class="pstat">FWD <b>${{fwd.len}} bp</b></span>
-      <span class="pstat">GC <b>${{fwd.gc_pct}}%</b></span>
-      <span class="pstat">Tm <b>${{fwd.tm}}°C</b></span>
-      <span class="pstat" style="margin-left:12px">REV <b>${{rev.len}} bp</b></span>
-      <span class="pstat">GC <b>${{rev.gc_pct}}%</b></span>
-      <span class="pstat">Tm <b>${{rev.tm}}°C</b></span>
-    </div>
-    <div style="background:var(--bg3);border-radius:6px;padding:8px 12px;margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;">
-      <span class="pstat">ΔTm <b style="color:${{parseFloat(deltaTm) <= 2 ? 'var(--green)' : parseFloat(deltaTm) <= 5 ? 'var(--gold)' : 'var(--coral)'}}">${{deltaTm}}°C</b></span>
+    <div style="background:var(--bg3);border-radius:6px;padding:8px 12px;display:flex;gap:16px;flex-wrap:wrap;">
+      <span class="pstat" style="${{flagBg('delta_tm_too_high')}}">ΔTm <b style="color:${{parseFloat(deltaTm) <= 2 ? 'var(--green)' : parseFloat(deltaTm) <= 5 ? 'var(--gold)' : 'var(--coral)'}}">${{deltaTm}}°C</b></span>
+      ${{ps ? `<span class="pstat" style="${{flagBg('heterodimer')}}">heterodimer <b>${{sv(hetero, '')}}</b></span>` : ''}}
       <span class="pstat">Amplicon <b style="color:var(--gold)">${{ampLen}} bp</b></span>
-      ${{ps ? `<span class="pstat">Amplifies <b style="color:${{ampCount > 0 ? 'var(--green)' : 'var(--coral)'}}">${{ampCount}}/${{SEQ_NAMES.length}}</b></span>` : ''}}
-      ${{ps && ps.ecopcr ? `<span class="pstat">ecoPCR <b style="color:var(--teal)">${{ps.ecopcr.total_hits}}/${{ps.ecopcr.db_sequences}}</b></span>` : ''}}
-      ${{!compatible ? '<span class="pstat"><b style="color:var(--coral)">Incompatible pair</b></span>' : ''}}
-      ${{compatible && !paired ? '<span class="pstat"><b style="color:var(--muted)">No analysis data for this combination</b></span>' : ''}}
+      <span class="pstat">Amplifies <b style="color:${{ampCount !== '?' && ampCount > 0 ? 'var(--green)' : ampCount === '?' ? 'var(--muted)' : 'var(--coral)'}}">${{ampCount}}${{ampCount !== '?' ? '/' + SEQ_NAMES.length : ''}}</b></span>
+      ${{ps && ps.ecopcr ? `<span class="pstat">Off-target <b style="color:var(--teal)">${{ps.ecopcr.total_hits}}/${{ps.ecopcr.db_sequences}}</b></span>` : ''}}
+      ${{tmIncompatible ? '<span class="pstat"><b style="color:var(--coral)">ΔTm incompatible</b></span>' : ''}}
     </div>
   `;
 }}
@@ -841,7 +898,6 @@ function updateAll() {{
   buildSelectedDetail();
   buildHitTable();
   buildEcoPCR();
-  buildZoomTrack();
   buildAlignment();
   rebuildInnerIdChart();
   rebuildVarChart();
@@ -862,33 +918,73 @@ function selectPrimerSet(idx) {{
 function buildHitTable() {{
   const tbody = document.getElementById('hitTableBody');
   tbody.innerHTML = '';
-  const ps = PS();
+  const titleEl = document.getElementById('ampPredTitle');
+  titleEl.textContent = selectedSpecies.size > 0
+    ? `Amplification Prediction · ${{selectedSpecies.size}} species required`
+    : 'Amplification Prediction · click species to filter primers';
+
+  const paired = currentPairMatches();
+  const ps = paired ? PS() : null;
+
+  // If no exact pair, gather per-primer mismatch data independently
+  const fwdHits = !paired && selectedFwdIdx !== null ? bestHitsForPrimer(uniqueFwds[selectedFwdIdx].seq, true) : null;
+  const revHits = !paired && selectedRevIdx !== null ? bestHitsForPrimer(uniqueRevs[selectedRevIdx].seq, false) : null;
+
   SEQ_NAMES.forEach(name => {{
-    const h = ps.hit_summary[name];
     const {{sp, acc, isRef}} = speciesLabel(name);
     const spStyle = isRef ? ' style="color:var(--gold)"' : '';
+    const isSel = selectedSpecies.has(name);
     const tr = document.createElement('tr');
-    if (h.has_amp) {{
-      const fCls = h.fwd_mm === 0 ? 'mm-0' : h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad';
-      const rCls = h.rev_mm === 0 ? 'mm-0' : h.rev_mm <= 1 ? 'mm-1' : 'mm-bad';
-      tr.innerHTML = `
-        <td><span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
-        <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{h.fwd_mm}}</span></td>
-        <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{h.rev_mm}}</span></td>
-        <td style="text-align:center;color:var(--gold)">${{h.amp_len}} bp</td>
-        <td style="text-align:center;color:var(--green);font-weight:700">✓ YES</td>`;
+    if (isSel) tr.classList.add('species-selected');
+    const selIcon = isSel ? '<span style="color:var(--green);margin-right:4px">●</span>' : '<span style="color:var(--muted);margin-right:4px">○</span>';
+
+    if (ps) {{
+      // Exact pair match — full data
+      const h = ps.hit_summary[name];
+      if (h.has_amp) {{
+        const fCls = h.fwd_mm === 0 ? 'mm-0' : h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad';
+        const rCls = h.rev_mm === 0 ? 'mm-0' : h.rev_mm <= 1 ? 'mm-1' : 'mm-bad';
+        tr.innerHTML = `
+          <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
+          <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{h.fwd_mm}}</span></td>
+          <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{h.rev_mm}}</span></td>
+          <td style="text-align:center;color:var(--gold)">${{h.amp_len}} bp</td>
+          <td style="text-align:center;color:var(--green);font-weight:700">✓ YES</td>`;
+      }} else {{
+        const fmm = h.fwd_mm >= 99 ? '—' : h.fwd_mm;
+        const rmm = h.rev_mm >= 99 ? '—' : h.rev_mm;
+        const fCls = h.fwd_mm >= 99 ? 'mm-bad' : (h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad');
+        const rCls = h.rev_mm >= 99 ? 'mm-bad' : (h.rev_mm <= 1 ? 'mm-1' : 'mm-bad');
+        tr.innerHTML = `
+          <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
+          <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{fmm}}</span></td>
+          <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{rmm}}</span></td>
+          <td style="text-align:center;color:var(--muted)">—</td>
+          <td style="text-align:center;color:var(--coral);font-weight:700">✗ NO</td>`;
+      }}
     }} else {{
-      const fmm = h.fwd_mm >= 99 ? '—' : h.fwd_mm;
-      const rmm = h.rev_mm >= 99 ? '—' : h.rev_mm;
-      const fCls = h.fwd_mm >= 99 ? 'mm-bad' : (h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad');
-      const rCls = h.rev_mm >= 99 ? 'mm-bad' : (h.rev_mm <= 1 ? 'mm-1' : 'mm-bad');
+      // No exact pair — show individual primer mismatch data
+      const fh = fwdHits ? fwdHits[name] : null;
+      const rh = revHits ? revHits[name] : null;
+      const fmm = fh ? fh.fwd_mm : null;
+      const rmm = rh ? rh.rev_mm : null;
+      const fDisp = fmm !== null && fmm < 99 ? fmm : '—';
+      const rDisp = rmm !== null && rmm < 99 ? rmm : '—';
+      const fCls = fmm === null || fmm >= 99 ? 'mm-bad' : (fmm === 0 ? 'mm-0' : fmm <= 1 ? 'mm-1' : 'mm-bad');
+      const rCls = rmm === null || rmm >= 99 ? 'mm-bad' : (rmm === 0 ? 'mm-0' : rmm <= 1 ? 'mm-1' : 'mm-bad');
       tr.innerHTML = `
-        <td><span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
-        <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{fmm}}</span></td>
-        <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{rmm}}</span></td>
+        <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
+        <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{fDisp}}</span></td>
+        <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{rDisp}}</span></td>
         <td style="text-align:center;color:var(--muted)">—</td>
-        <td style="text-align:center;color:var(--coral);font-weight:700">✗ NO</td>`;
+        <td style="text-align:center;color:var(--muted);font-weight:700">?</td>`;
     }}
+    tr.addEventListener('click', () => {{
+      if (selectedSpecies.has(name)) selectedSpecies.delete(name);
+      else selectedSpecies.add(name);
+      buildHitTable();
+      buildPrimerTrack();
+    }});
     tbody.appendChild(tr);
   }});
 }}
@@ -1021,106 +1117,18 @@ function buildGeneTrack() {{
 }}
 
 
-// ── ZOOMED 12S TRACK (rebuilt on switch) ─────────────────────────────────────
-function buildZoomTrack() {{
-  const track = document.getElementById('zoomTrack');
-  const axis = document.getElementById('zoomAxis');
-  const info = document.getElementById('zoomInfo');
-  const wrap = document.getElementById('zoomWrap');
-  // Remove old labels above track
-  wrap.querySelectorAll('.zoom-label').forEach(el => el.remove());
-
-  track.innerHTML = '';
-  axis.innerHTML = '';
-  info.innerHTML = '';
-
-  const ps = PS();
-  const gc = ps.gapped;
-  const span = S12_END - S12_START;
-
-  // 12S fill
-  const s12El = document.createElement('div');
-  s12El.className = 'zoom-gene-fill';
-  s12El.style.cssText = 'left:0;right:0;background:#57cc9922;border:1px solid #57cc9944;';
-  s12El.textContent = '12S rRNA';
-  track.appendChild(s12El);
-
-  if (!gc || !gc.amp_start) {{
-    info.innerHTML = '<span style="color:var(--coral)">No amplicon in reference for this primer set</span>';
-    const ticks = [0, 200, 400, 600, 800, span];
-    ticks.forEach(t => {{ const s = document.createElement('span'); s.textContent = t + S12_START; axis.appendChild(s); }});
-    return;
-  }}
-
-  const fwdGS = gc.fwd_start, fwdGE = gc.fwd_end;
-  const revGS = gc.rev_start, revGE = gc.rev_end;
-  const ampLen = gc.amp_end - gc.amp_start;
-  const innerLen = revGS - fwdGE;
-
-  // Amplicon
-  const aL = (fwdGS - S12_START) / span * 100;
-  const aW = (gc.amp_end - fwdGS) / span * 100;
-  const ampEl = document.createElement('div');
-  ampEl.className = 'zoom-amplicon';
-  ampEl.style.cssText += `left:${{aL}}%;width:${{aW}}%;`;
-  track.appendChild(ampEl);
-
-  const ampLbl = document.createElement('div');
-  ampLbl.className = 'zoom-label';
-  ampLbl.style.cssText = `left:${{aL + aW/2}}%;transform:translateX(-50%);color:rgba(250,204,21,0.8);white-space:nowrap;`;
-  ampLbl.textContent = '◀── ' + ampLen + ' bp amplicon ──▶';
-  wrap.insertBefore(ampLbl, track);
-
-  // FWD
-  const fL = (fwdGS - S12_START) / span * 100;
-  const fW = (fwdGE - fwdGS) / span * 100;
-  const fEl = document.createElement('div');
-  fEl.className = 'zoom-primer';
-  fEl.style.cssText = `left:${{fL}}%;width:${{fW}}%;background:rgba(245,158,11,0.85);color:#000;`;
-  fEl.innerHTML = '▶ FWD';
-  fEl.title = ps.fwd;
-  track.appendChild(fEl);
-
-  // REV
-  const rL = (revGS - S12_START) / span * 100;
-  const rW = (revGE - revGS) / span * 100;
-  const rEl = document.createElement('div');
-  rEl.className = 'zoom-primer';
-  rEl.style.cssText = `left:${{rL}}%;width:${{rW}}%;background:rgba(236,72,153,0.85);color:#fff;`;
-  rEl.innerHTML = 'REV ◀';
-  rEl.title = ps.rev;
-  track.appendChild(rEl);
-
-  // Inner
-  const iL = (fwdGE - S12_START) / span * 100;
-  const iW = (revGS - fwdGE) / span * 100;
-  const iEl = document.createElement('div');
-  iEl.style.cssText = `position:absolute;left:${{iL}}%;width:${{iW}}%;top:12px;bottom:12px;border-top:1px dashed rgba(56,217,217,0.4);border-bottom:1px dashed rgba(56,217,217,0.4);display:flex;align-items:center;justify-content:center;font-size:9px;color:rgba(56,217,217,0.7);`;
-  iEl.textContent = innerLen + ' bp variable';
-  track.appendChild(iEl);
-
-  // Axis
-  const ticks = [0, 200, 400, 600, 800, span];
-  ticks.forEach(t => {{ const s = document.createElement('span'); s.textContent = t + S12_START; axis.appendChild(s); }});
-
-  // Info bar
-  const fwdIn12s = fwdGS - S12_START;
-  const revIn12s = revGS - S12_START;
-  info.innerHTML = `
-    <span>12S total: <b style="color:var(--cyan)">${{span}} bp</b></span>
-    <span>FWD binds: <b style="color:var(--primer-fwd)">pos ${{fwdIn12s}}–${{fwdGE - S12_START}} within 12S</b></span>
-    <span>REV binds: <b style="color:var(--primer-rev)">pos ${{revIn12s}}–${{revGE - S12_START}} within 12S</b></span>
-    <span>Inner: <b style="color:var(--gold)">${{innerLen}} bp variable region</b></span>
-  `;
-}}
-
 // ── AMPLICON ALIGNMENT (rebuilt on switch) ───────────────────────────────────
 function buildAlignment() {{
   const container = document.getElementById('alnViewer');
   container.innerHTML = '';
+  const paired = currentPairMatches();
   const ps = PS();
   const amps = ps.amplicons;
   const refAmp = amps[SEQ_NAMES[0]];
+  if (!paired) {{
+    container.innerHTML = '<div class="no-amp-msg">No amplicon data for this combination — select a tested FWD+REV pair to view alignment</div>';
+    return;
+  }}
   if (!refAmp) {{
     container.innerHTML = '<div class="no-amp-msg"><b>No amplicon</b> found in reference for this primer set</div>';
     return;
@@ -1183,6 +1191,10 @@ function buildAlignment() {{
 let innerIdChartObj = null;
 function rebuildInnerIdChart() {{
   if (innerIdChartObj) {{ innerIdChartObj.destroy(); innerIdChartObj = null; }}
+  if (!currentPairMatches()) {{
+    document.getElementById('innerIdChart').getContext('2d').clearRect(0,0,9999,9999);
+    return;
+  }}
   const ps = PS();
   const refAmp = ps.amplicons[SEQ_NAMES[0]];
   if (!refAmp) {{
@@ -1223,6 +1235,10 @@ function rebuildInnerIdChart() {{
 let varChartObj = null;
 function rebuildVarChart() {{
   if (varChartObj) {{ varChartObj.destroy(); varChartObj = null; }}
+  if (!currentPairMatches()) {{
+    document.getElementById('varChart').getContext('2d').clearRect(0,0,9999,9999);
+    return;
+  }}
   const ps = PS();
   const refAmp = ps.amplicons[SEQ_NAMES[0]];
   if (!refAmp) {{
@@ -1364,7 +1380,6 @@ buildPrimerTrack();
 buildSelectedDetail();
 buildHitTable();
 buildEcoPCR();
-buildZoomTrack();
 buildAlignment();
 rebuildInnerIdChart();
 rebuildVarChart();

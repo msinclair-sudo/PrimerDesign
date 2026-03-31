@@ -10,9 +10,12 @@ Requires primer3-py (preferred) or ntthal CLI as fallback.
 import argparse
 import csv
 import json
+import multiprocessing
+import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
@@ -365,10 +368,21 @@ def run(input_csv, output_csv, config_path, keep_rejected):
             sys.exit(1)
         pairs = list(reader)
 
+    workers = int(os.environ.get("PRIMER_WORKERS", max(1, multiprocessing.cpu_count() - 1)))
+    print(f"[info] Using {workers} workers", file=sys.stderr)
+
+    def _validate_one(pair):
+        return validate_pair(pair["name"], pair["forward"], pair["reverse"], cfg)
+
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results_all = list(pool.map(_validate_one, pairs))
+    else:
+        results_all = [validate_pair(p["name"], p["forward"], p["reverse"], cfg) for p in pairs]
+
     results = []
     n_pass, n_flag, n_reject = 0, 0, 0
-    for pair in pairs:
-        row = validate_pair(pair["name"], pair["forward"], pair["reverse"], cfg)
+    for row in results_all:
         if row["status"] == "PASS":
             n_pass += 1
         elif row["status"] == "FLAG":

@@ -22,11 +22,14 @@ import argparse
 import csv
 import hashlib
 import json
+import multiprocessing
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import primer3
@@ -363,6 +366,74 @@ def compute_primer_properties(fwd: str, rev: str) -> dict:
     }
 
 
+def compute_flags(props: dict, thermo_cfg: dict) -> list[str]:
+    """Compute thermodynamic flags for a primer pair, matching validate_thermodynamics logic."""
+    flags = []
+    fwd = props["fwd"]
+    rev = props["rev"]
+    tm_lo, tm_hi = thermo_cfg.get("tm_range", [58, 64])
+    gc_lo, gc_hi = thermo_cfg.get("gc_range", [40, 60])
+    clamp_lo, clamp_hi = thermo_cfg.get("gc_clamp_3prime", [1, 3])
+    max_delta_tm = thermo_cfg.get("max_delta_tm", 5)
+    max_hairpin = thermo_cfg.get("max_hairpin_dg", -3.0)
+    max_homodimer = thermo_cfg.get("max_homodimer_dg", -9.0)
+    max_heterodimer = thermo_cfg.get("max_heterodimer_dg", -9.0)
+    max_homopoly = thermo_cfg.get("max_homopolymer", 4)
+
+    def gc_clamp_count(seq, window=5):
+        return sum(1 for b in seq.upper()[-window:] if b in "GC")
+
+    def max_homopolymer(seq):
+        if not seq:
+            return 0
+        max_run = run = 1
+        for i in range(1, len(seq)):
+            if seq[i].upper() == seq[i-1].upper():
+                run += 1
+                if run > max_run:
+                    max_run = run
+            else:
+                run = 1
+        return max_run
+
+    if not (tm_lo <= fwd["tm"] <= tm_hi):
+        flags.append("tm_fwd_out_of_range")
+    if not (tm_lo <= rev["tm"] <= tm_hi):
+        flags.append("tm_rev_out_of_range")
+    if props["delta_tm"] > max_delta_tm:
+        flags.append("delta_tm_too_high")
+    if fwd["hairpin_dg"] < max_hairpin:
+        flags.append("hairpin_fwd")
+    if rev["hairpin_dg"] < max_hairpin:
+        flags.append("hairpin_rev")
+    if fwd["homodimer_dg"] < max_homodimer:
+        flags.append("homodimer_fwd")
+    if rev["homodimer_dg"] < max_homodimer:
+        flags.append("homodimer_rev")
+    if props["heterodimer_dg"] < max_heterodimer:
+        flags.append("heterodimer")
+    if not (gc_lo <= fwd["gc_pct"] <= gc_hi):
+        flags.append("gc_fwd_out_of_range")
+    if not (gc_lo <= rev["gc_pct"] <= gc_hi):
+        flags.append("gc_rev_out_of_range")
+
+    fwd_clamp = gc_clamp_count(fwd["seq"])
+    rev_clamp = gc_clamp_count(rev["seq"])
+    if not (clamp_lo <= fwd_clamp <= clamp_hi):
+        flags.append("gc_clamp_fwd")
+    if not (clamp_lo <= rev_clamp <= clamp_hi):
+        flags.append("gc_clamp_rev")
+
+    fwd_hp = max_homopolymer(fwd["seq"])
+    rev_hp = max_homopolymer(rev["seq"])
+    if fwd_hp > max_homopoly:
+        flags.append("homopolymer_fwd")
+    if rev_hp > max_homopoly:
+        flags.append("homopolymer_rev")
+
+    return flags
+
+
 # ── ALIGNMENT-LEVEL FUNCTIONS (no primers involved) ─────────────────────────
 def pairwise_id(s1: str, s2: str, min_sites: int = 1) -> float | None:
     m = t = 0
@@ -574,16 +645,29 @@ def analyse_primer_set(
     seq_names: list,
     ref_name: str,
     ungap_to_gap: dict,
+    all_ungap_to_gap: dict | None = None,
+    on_target_mm: int = 2,
+    amp_range: tuple = (10, 500),
+    thermo_cfg: dict | None = None,
 ) -> dict:
     """Run primer analysis using obipcr for binding + primer3-py for properties."""
 
     # Primer properties via primer3-py (nearest-neighbor thermodynamics)
     primer_props = compute_primer_properties(fwd_primer, rev_primer)
 
+    # Compute flags if thermo config provided
+    if thermo_cfg:
+        flags = compute_flags(primer_props, thermo_cfg)
+        primer_props["flags"] = flags
+        primer_props["status"] = "FLAG" if flags else "PASS"
+    else:
+        primer_props["flags"] = []
+        primer_props["status"] = "PASS"
+
     # In silico PCR via obipcr against MSA sequences
     obipcr_result = run_obipcr(
         fwd_primer, rev_primer, msa_fasta_path,
-        max_mm=3, min_len=10, max_len=500, circular=False,
+        max_mm=on_target_mm, min_len=amp_range[0], max_len=amp_range[1], circular=False,
     )
 
     # Build per-sequence hit data from obipcr results
@@ -617,16 +701,35 @@ def analyse_primer_set(
             if amplicons_dict[matched_name] is None:
                 amplicons_dict[matched_name] = amp
 
-    # Map primer coords to gapped alignment (using reference)
-    ref_amp = amplicons_dict.get(ref_name)
-    if ref_amp:
-        fwd_ug_s = ref_amp["start"]
-        rev_ug_s = ref_amp["end"] - len(rev_primer)
+    # Map primer coords to gapped alignment
+    # Prefer reference; fall back to any amplified sequence if reference didn't amplify
+    coord_amp = amplicons_dict.get(ref_name)
+    coord_gap_map = ungap_to_gap
+    coord_source = ref_name
 
-        fwd_gap_s = ungap_to_gap.get(fwd_ug_s, fwd_ug_s)
-        fwd_gap_e = ungap_to_gap.get(fwd_ug_s + len(fwd_primer) - 1, fwd_gap_s + len(fwd_primer)) + 1
-        rev_gap_s = ungap_to_gap.get(rev_ug_s, rev_ug_s)
-        rev_gap_e = ungap_to_gap.get(rev_ug_s + len(rev_primer) - 1, rev_gap_s + len(rev_primer)) + 1
+    if coord_amp is None and all_ungap_to_gap:
+        # Find the sequence with the fewest total mismatches
+        best_name, best_mm = None, 999
+        for name in seq_names:
+            amp = amplicons_dict.get(name)
+            if amp is not None and name in all_ungap_to_gap:
+                mm = amp["fwd_mm"] + amp["rev_mm"]
+                if mm < best_mm:
+                    best_mm = mm
+                    best_name = name
+        if best_name:
+            coord_amp = amplicons_dict[best_name]
+            coord_gap_map = all_ungap_to_gap[best_name]
+            coord_source = best_name
+
+    if coord_amp:
+        fwd_ug_s = coord_amp["start"]
+        rev_ug_s = coord_amp["end"] - len(rev_primer)
+
+        fwd_gap_s = coord_gap_map.get(fwd_ug_s, fwd_ug_s)
+        fwd_gap_e = coord_gap_map.get(fwd_ug_s + len(fwd_primer) - 1, fwd_gap_s + len(fwd_primer)) + 1
+        rev_gap_s = coord_gap_map.get(rev_ug_s, rev_ug_s)
+        rev_gap_e = coord_gap_map.get(rev_ug_s + len(rev_primer) - 1, rev_gap_s + len(rev_primer)) + 1
 
         primer_props["gapped_coords"] = {
             "fwd_start": fwd_gap_s,
@@ -636,11 +739,13 @@ def analyse_primer_set(
             "amp_start": fwd_gap_s,
             "amp_end": rev_gap_e,
         }
+        if coord_source != ref_name:
+            print(f"      Coords via: {coord_source} (ref did not amplify)")
         print(f"      FWD gapped: {fwd_gap_s}–{fwd_gap_e}")
         print(f"      REV gapped: {rev_gap_s}–{rev_gap_e}")
         print(f"      Amplicon:   {rev_gap_e - fwd_gap_s} gapped bp")
     else:
-        print("      WARNING: No amplicon found in reference — check primers")
+        print("      WARNING: No amplicon found in any sequence — check primers")
         primer_props["gapped_coords"] = {}
 
     # Per-position variability across amplicons
@@ -667,10 +772,73 @@ def analyse_primer_set(
     }
 
 
+# ── PARALLEL WORKER FUNCTIONS (module-level for pickling) ─────────────────────
+def _analyse_worker(args):
+    """Worker for parallel MSA binding analysis."""
+    name, fwd, rev, msa_path, seq_names, ref_name, ungap_to_gap, all_ungap_to_gap, on_target_mm, amp_range, thermo_cfg = args
+    return analyse_primer_set(name, fwd, rev, msa_path, seq_names, ref_name, ungap_to_gap, all_ungap_to_gap, on_target_mm, amp_range, thermo_cfg)
+
+
+def _ecopcr_worker(args):
+    """Worker for parallel ecoPCR off-target screening."""
+    fwd_primer, rev_primer, database, off_target_mm, eco_min, eco_max, eco_circular = args
+    return run_obipcr(
+        fwd_primer, rev_primer, database,
+        max_mm=off_target_mm, min_len=eco_min, max_len=eco_max, circular=eco_circular,
+    )
+
+
 # ── MAIN ──────────────────────────────────────────────────────────────────────
+def load_config(config_path: str | None) -> dict:
+    """Load analysis config from YAML, with defaults."""
+    import yaml
+    defaults = {
+        "on_target_mm": 2,
+        "off_target_mm": 3,
+        "amp_min": 10,
+        "amp_max": 500,
+        "eco_min": 50,
+        "eco_max": 500,
+        "eco_circular": True,
+    }
+    if config_path is None:
+        return defaults
+    p = Path(config_path)
+    if not p.exists():
+        return defaults
+    with open(p) as f:
+        raw = yaml.safe_load(f)
+    mm = raw.get("mismatches", {})
+    eco = raw.get("ecopcr", {})
+    design = raw.get("design", {})
+    thermo = raw.get("thermodynamics", {})
+    return {
+        "on_target_mm": mm.get("on_target", defaults["on_target_mm"]),
+        "off_target_mm": mm.get("off_target", defaults["off_target_mm"]),
+        "amp_min": design.get("min_amplicon_length", defaults["amp_min"]),
+        "amp_max": design.get("max_amplicon_length", defaults["amp_max"]),
+        "eco_min": eco.get("min_amplicon_length", defaults["eco_min"]),
+        "eco_max": eco.get("max_amplicon_length", defaults["eco_max"]),
+        "eco_circular": eco.get("circular", defaults["eco_circular"]),
+        "thermo": thermo,
+    }
+
+
 def main(fasta_path: str, primers_csv: str | None = None,
          output_path: str = OUTPUT_JSON, database: str | None = None,
-         genbank_path: str | None = None):
+         genbank_path: str | None = None, config_path: str | None = None):
+    workers = int(os.environ.get("PRIMER_WORKERS", max(1, multiprocessing.cpu_count() - 1)))
+    print(f"Using {workers} workers for binding analysis")
+
+    cfg = load_config(config_path)
+    on_target_mm = cfg["on_target_mm"]
+    off_target_mm = cfg["off_target_mm"]
+    amp_range = (cfg["amp_min"], cfg["amp_max"])
+    eco_min = cfg["eco_min"]
+    eco_max = cfg["eco_max"]
+    eco_circular = cfg["eco_circular"]
+    thermo_cfg = cfg.get("thermo", {})
+
     has_db = database is not None
     has_gb = genbank_path is not None
     n_steps = 5 + (1 if has_db else 0) + (1 if has_gb else 0)
@@ -686,6 +854,11 @@ def main(fasta_path: str, primers_csv: str | None = None,
     ref_name = seq_names[0]
     ref_gapped = seqs_gapped[ref_name]
     ungap_to_gap, _ = build_coord_maps(ref_gapped)
+
+    # Build gap maps for all sequences (used as fallback when ref doesn't amplify)
+    all_ungap_to_gap = {}
+    for name, gapped in seqs_gapped.items():
+        all_ungap_to_gap[name], _ = build_coord_maps(gapped)
 
     # ── Gene annotations from GenBank
     genes = []
@@ -740,16 +913,29 @@ def main(fasta_path: str, primers_csv: str | None = None,
         sys.exit("ERROR: --primers CSV is required. See primers.csv for format.")
 
     # ── Analyse each primer set via obipcr
-    primer_sets = []
-    for i, p in enumerate(primer_list, 1):
-        print(f"\n  ── Primer set {i}/{len(primer_list)}: {p['name']} ──")
-        print(f"      FWD: {p['forward']}")
-        print(f"      REV: {p['reverse']}")
-        result = analyse_primer_set(
-            p["name"], p["forward"], p["reverse"],
-            msa_fasta_path, seq_names, ref_name, ungap_to_gap,
-        )
-        primer_sets.append(result)
+    if workers > 1 and len(primer_list) > 1:
+        print(f"\n  Running {len(primer_list)} primer sets in parallel ({workers} workers) ...")
+        worker_args = [
+            (p["name"], p["forward"], p["reverse"], msa_fasta_path, seq_names, ref_name, ungap_to_gap, all_ungap_to_gap, on_target_mm, amp_range, thermo_cfg)
+            for p in primer_list
+        ]
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            primer_sets = list(pool.map(_analyse_worker, worker_args))
+        for i, (p, result) in enumerate(zip(primer_list, primer_sets), 1):
+            n_amp = sum(1 for a in result["amplicons"].values() if a is not None)
+            print(f"  ── Primer set {i}/{len(primer_list)}: {p['name']} — {n_amp}/{len(seq_names)} amplify")
+    else:
+        primer_sets = []
+        for i, p in enumerate(primer_list, 1):
+            print(f"\n  ── Primer set {i}/{len(primer_list)}: {p['name']} ──")
+            print(f"      FWD: {p['forward']}")
+            print(f"      REV: {p['reverse']}")
+            result = analyse_primer_set(
+                p["name"], p["forward"], p["reverse"],
+                msa_fasta_path, seq_names, ref_name, ungap_to_gap,
+                all_ungap_to_gap, on_target_mm, amp_range, thermo_cfg,
+            )
+            primer_sets.append(result)
 
     # Clean up temp file
     Path(msa_fasta_path).unlink(missing_ok=True)
@@ -762,22 +948,39 @@ def main(fasta_path: str, primers_csv: str | None = None,
         step += 1
         print(f"\n[{step}/{n_steps}] Running ecoPCR (obipcr) against {database} ...")
         print(f"      {len(viable)} pairs with MSA amplicons, skipping {skipped} non-amplifying pairs")
-        for vi, (i, ps) in enumerate(viable):
-            print(f"\n  ── ecoPCR {vi+1}/{len(viable)}: {ps['name']} ──")
-            ecopcr_result = run_obipcr(
-                ps["fwd_primer"], ps["rev_primer"], database,
-                max_mm=3, min_len=50, max_len=500, circular=True,
-            )
-            ps["ecopcr"] = ecopcr_result
-            if ecopcr_result:
-                print(f"      {ecopcr_result['total_hits']}/{ecopcr_result['db_sequences']} sequences amplify")
-                if ecopcr_result["total_hits"] > 0:
-                    print(f"      Amplicon range: {ecopcr_result['amplicon_length_min']}–{ecopcr_result['amplicon_length_max']} bp")
-                    for mm_key, count in sorted(ecopcr_result["mismatch_counts"].items(),
-                                                 key=lambda x: -x[1])[:5]:
-                        print(f"      {mm_key} mm: {count} hits")
-            else:
-                print("      ecoPCR not available or failed")
+
+        if workers > 1 and len(viable) > 1:
+            print(f"      Running {len(viable)} ecoPCR jobs in parallel ({workers} workers) ...")
+            ecopcr_args = [
+                (ps["fwd_primer"], ps["rev_primer"], database, off_target_mm, eco_min, eco_max, eco_circular)
+                for _, ps in viable
+            ]
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                ecopcr_results = list(pool.map(_ecopcr_worker, ecopcr_args))
+            for vi, ((i, ps), ecopcr_result) in enumerate(zip(viable, ecopcr_results)):
+                ps["ecopcr"] = ecopcr_result
+                if ecopcr_result:
+                    print(f"  ── ecoPCR {vi+1}/{len(viable)}: {ps['name']} — "
+                          f"{ecopcr_result['total_hits']}/{ecopcr_result['db_sequences']} sequences amplify")
+                else:
+                    print(f"  ── ecoPCR {vi+1}/{len(viable)}: {ps['name']} — not available or failed")
+        else:
+            for vi, (i, ps) in enumerate(viable):
+                print(f"\n  ── ecoPCR {vi+1}/{len(viable)}: {ps['name']} ──")
+                ecopcr_result = run_obipcr(
+                    ps["fwd_primer"], ps["rev_primer"], database,
+                    max_mm=off_target_mm, min_len=eco_min, max_len=eco_max, circular=eco_circular,
+                )
+                ps["ecopcr"] = ecopcr_result
+                if ecopcr_result:
+                    print(f"      {ecopcr_result['total_hits']}/{ecopcr_result['db_sequences']} sequences amplify")
+                    if ecopcr_result["total_hits"] > 0:
+                        print(f"      Amplicon range: {ecopcr_result['amplicon_length_min']}–{ecopcr_result['amplicon_length_max']} bp")
+                        for mm_key, count in sorted(ecopcr_result["mismatch_counts"].items(),
+                                                     key=lambda x: -x[1])[:5]:
+                            print(f"      {mm_key} mm: {count} hits")
+                else:
+                    print("      ecoPCR not available or failed")
 
     # ── Assemble output
     step += 1
@@ -827,5 +1030,7 @@ if __name__ == "__main__":
     parser.add_argument("--database", "-d", default=None, help="FASTA dir/file for ecoPCR off-target screening")
     parser.add_argument("--genbank", "-g", default=None,
                         help="GenBank file (.gb) for gene annotation mapping. Must match at least one MSA sequence.")
+    parser.add_argument("--config", "-c", default=None,
+                        help="Config YAML for mismatch tolerances and ecoPCR parameters")
     args = parser.parse_args()
-    main(args.fasta, args.primers, args.output, args.database, args.genbank)
+    main(args.fasta, args.primers, args.output, args.database, args.genbank, args.config)

@@ -12,6 +12,7 @@ Debug mode (run individual steps):
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,11 +24,11 @@ DEFAULT_OUTPUT = Path("data/output")
 STEPS = ["design", "validate", "expand", "analyse", "rank", "report"]
 
 
-def run(cmd, desc):
+def run(cmd, desc, env=None):
     print(f"\n{'='*60}")
     print(f"  {desc}")
     print(f"{'='*60}\n")
-    result = subprocess.run(cmd, text=True)
+    result = subprocess.run(cmd, text=True, env=env)
     if result.returncode != 0:
         print(f"\nERROR: {desc} failed (exit {result.returncode})")
         sys.exit(result.returncode)
@@ -51,6 +52,8 @@ def main():
                         help="CSV of primers to evaluate (skips design step)")
     parser.add_argument("-c", "--config", default=str(CONFIG),
                         help="Config YAML (default: primer_config.yaml)")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Number of parallel workers for Steps 2-4 (default: auto-detect)")
     args = parser.parse_args()
 
     # Determine run mode
@@ -66,6 +69,11 @@ def main():
         run_steps = STEPS
 
     output_dir = Path(args.output)
+
+    # Build environment with optional worker count
+    run_env = os.environ.copy()
+    if args.workers is not None:
+        run_env["PRIMER_WORKERS"] = str(args.workers)
 
     # Auto-detect genbank if not specified: look for .gb files next to the input
     if args.genbank is None:
@@ -99,7 +107,8 @@ def main():
             run(
                 [sys.executable, str(APP_DIR / "design_primers.py"),
                  args.input, "-o", str(primers_csv), "--config", args.config],
-                "Step 1: Design primers from MSA")
+                "Step 1: Design primers from MSA",
+                env=run_env)
 
     steps = {
         "design": run_design,
@@ -107,30 +116,36 @@ def main():
         "validate": lambda: run(
             [sys.executable, str(APP_DIR / "validate_thermodynamics.py"),
              str(primers_csv), "-o", str(primers_filtered), "--config", args.config],
-            "Step 2: Thermodynamic validation"),
+            "Step 2: Thermodynamic validation",
+            env=run_env),
 
         "expand": lambda: run(
             [sys.executable, str(APP_DIR / "expand_combinations.py"),
-             str(primers_filtered), "-o", str(primers_expanded), "--config", args.config],
-            "Step 2b: Expand viable FWD+REV combinations"),
+             str(primers_filtered), "-i", args.input,
+             "-o", str(primers_expanded), "--config", args.config],
+            "Step 2b: Expand viable FWD+REV combinations",
+            env=run_env),
 
         "analyse": lambda: run(
             [sys.executable, str(APP_DIR / "analyse_primers.py"),
              args.input, "--primers", str(primers_expanded),
-             "-o", str(analysis_json)]
+             "-o", str(analysis_json), "--config", args.config]
             + (["--database", args.database] if args.database else [])
             + (["--genbank", args.genbank] if args.genbank else []),
-            "Steps 3+4: Binding analysis + ecoPCR + annotations"),
+            "Steps 3+4: Binding analysis + ecoPCR + annotations",
+            env=run_env),
 
         "rank": lambda: run(
             [sys.executable, str(APP_DIR / "rank_primers.py"),
              str(analysis_json), "-o", str(ranked_csv), "--config", args.config],
-            "Step 5: Rank primers"),
+            "Step 5: Rank primers",
+            env=run_env),
 
         "report": lambda: run(
             [sys.executable, str(APP_DIR / "generate_report.py"),
              str(analysis_json), "-o", str(report_html)],
-            "Step 6: Generate HTML report"),
+            "Step 6: Generate HTML report",
+            env=run_env),
     }
 
     for step_name in run_steps:

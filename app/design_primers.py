@@ -104,17 +104,19 @@ n_seqs <- dbGetQuery(dbConn, "SELECT COUNT(*) FROM Seqs")[[1]]
 cat("Loaded", n_seqs, "sequences\n")
 
 # DesignSignatures for maximal amplicon diversity
-n_cores <- max(1, min(parallel::detectCores() - 1, 4))
+n_cores <- config$n_cores
 cat("Using", n_cores, "cores\n")
 
 sigs <- DesignSignatures(
   dbConn,
-  type        = "sequence",
+  type           = "sequence",
   minProductSize = config$min_amplicon_length,
   maxProductSize = config$max_amplicon_length,
-  resolution  = config$resolution,
-  levels      = 5,
-  processors  = n_cores
+  resolution     = config$resolution,
+  levels         = 5,
+  numPrimerSets  = config$num_primer_sets,
+  searchPrimers  = config$search_primers,
+  processors     = n_cores
 )
 
 dbDisconnect(dbConn)
@@ -146,10 +148,22 @@ def design_with_decipher(fasta_path: str, config: dict) -> list[dict]:
     design_cfg = config.get("design", {})
     decipher_cfg = config.get("decipher", {})
 
+    # Determine core count: env var PRIMER_WORKERS > fallback to (cpu_count - 1)
+    available_cores = os.cpu_count() or 1
+    fallback_cores = max(1, available_cores - 1)
+    env_workers = os.environ.get("PRIMER_WORKERS")
+    if env_workers is not None:
+        n_cores = min(int(env_workers), available_cores)
+    else:
+        n_cores = fallback_cores
+
     r_config = {
         "min_amplicon_length": design_cfg.get("min_amplicon_length", 90),
         "max_amplicon_length": design_cfg.get("max_amplicon_length", 180),
         "resolution": decipher_cfg.get("resolution", 5),
+        "num_primer_sets": decipher_cfg.get("num_primer_sets", 1000),
+        "search_primers": decipher_cfg.get("search_primers", 2000),
+        "n_cores": n_cores,
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:

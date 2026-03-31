@@ -1,44 +1,54 @@
-# Primer design constraints
+# ── Primer size and amplicon constraints ──────────────────────────────────────
 design:
-  min_primer_length: 18
-  max_primer_length: 25
-  min_amplicon_length: 90
-  max_amplicon_length: 180
-  optimal_amplicon_length: 130
+  min_primer_length: 18        # Shortest primer to consider (bp)
+  max_primer_length: 25        # Longest primer to consider (bp)
+  min_amplicon_length: 90      # Shortest acceptable amplicon (bp); used in design, expand, and on-target binding
+  max_amplicon_length: 180     # Longest acceptable amplicon (bp); used in design, expand, and on-target binding
+  optimal_amplicon_length: 130 # Target amplicon size for ranking (bp)
 
-# Thermodynamic thresholds
-thermodynamics:
-  tm_range: [58, 64]
-  max_delta_tm: 5
-  gc_range: [40, 60]
-  max_hairpin_dg: -3.0
-  max_homodimer_dg: -9.0
-  max_heterodimer_dg: -9.0
-  max_homopolymer: 4
-  gc_clamp_3prime: [1, 3]
-
-# Binding analysis
-binding:
-  max_mismatches: 3
-  max_amplicon_distance: 500
-
-# Off-target (ecoPCR)
-ecopcr:
-  max_mismatches: 3
-  min_amplicon_length: 50
-  max_amplicon_length: 500
-  circular: true
-
-# Ranking weights
-ranking:
-  binding_universality: 0.25
-  thermodynamic_quality: 0.20
-  species_resolution: 0.20
-  off_target_specificity: 0.20
-  amplicon_suitability: 0.15
-
-# DECIPHER-specific (if using Option A)
+# ── DECIPHER DesignSignatures ─────────────────────────────────────────────────
 decipher:
-  min_coverage: 0.8
-  resolution: 5
-  max_degeneracy: 128
+  min_coverage: 0.8            # Minimum fraction of sequences a primer must bind (0-1)
+  resolution: 5                # k-mer size for differentiating amplicon sequences
+  max_degeneracy: 128          # Maximum degeneracy (fold) allowed per primer
+  num_primer_sets: 100         # Number of primer pairs returned; increase to explore more regions
+  search_primers: 500          # Candidate primers in initial search; increase for broader coverage
+
+# ── Thermodynamic filtering ───────────────────────────────────────────────────
+# Applied in Step 2 (validate) and Step 2b (expand). REJECT = removed, FLAG = kept with warning.
+thermodynamics:
+  tm_range: [52, 60]           # Acceptable melting temperature (degrees C); outside = REJECT
+  max_delta_tm: 5              # Max Tm difference between FWD and REV (degrees C); above = REJECT
+  gc_range: [40, 60]           # Acceptable GC content (%); outside = FLAG
+  max_hairpin_dg: -3.0         # Most negative hairpin delta-G allowed (kcal/mol); below = REJECT
+  max_homodimer_dg: -9.0       # Most negative homodimer delta-G allowed (kcal/mol); below = FLAG
+  max_heterodimer_dg: -9.0     # Most negative heterodimer delta-G allowed (kcal/mol); below = FLAG
+  max_homopolymer: 4           # Max consecutive identical bases; above = FLAG
+  gc_clamp_3prime: [1, 3]      # G/C count in last 5 bases at 3' end; outside range = FLAG
+
+# ── Mismatch tolerances ──────────────────────────────────────────────────────
+# These control how many mismatches obipcr allows per primer in different contexts.
+# On-target: how forgiving binding analysis is against your MSA sequences.
+# Off-target: how broadly the specificity screen searches non-target sequences.
+# Higher values find more hits but include weaker binding events.
+mismatches:
+  on_target: 2                 # Mismatches allowed per primer when scanning MSA sequences (Step 3)
+  off_target: 3                # Mismatches allowed per primer in off-target ecoPCR screen (Step 4)
+
+# ── Off-target screening (ecoPCR) ────────────────────────────────────────────
+# Controls the ecoPCR search against the off-target database (-d flag).
+# Amplicon range here is typically wider than the design range, since non-target
+# organisms may produce longer or shorter products.
+ecopcr:
+  min_amplicon_length: 10      # Shortest off-target amplicon to report (bp)
+  max_amplicon_length: 500     # Longest off-target amplicon to report (bp)
+  circular: true               # Treat database sequences as circular (e.g. mitogenomes)
+
+# ── Ranking weights ──────────────────────────────────────────────────────────
+# Weights for the five scoring components (must sum to 1.0).
+ranking:
+  binding_universality: 0.25   # Fraction of MSA sequences amplified
+  thermodynamic_quality: 0.20  # Tm optimality, low delta-Tm, minimal secondary structures
+  species_resolution: 0.20     # Proportion of variable positions in amplicon
+  off_target_specificity: 0.20 # Off-target hit quality from ecoPCR
+  amplicon_suitability: 0.15   # Closeness to optimal amplicon length
