@@ -16,10 +16,10 @@ from pathlib import Path
 
 # ── Colour palette for sequences ─────────────────────────────────────────────
 PALETTE = [
-    "#f0a732", "#ffd166", "#38d9d9", "#ff6b6b", "#2ec4b6",
-    "#ff8fa3", "#ff6b9d", "#c77dff", "#e040fb", "#f06292",
-    "#ba68c8", "#4fc3f7", "#81c784", "#ffb74d", "#e57373",
-    "#aed581", "#4dd0e1", "#9575cd", "#f06292", "#dce775",
+    "#0da888", "#d97706", "#0284c7", "#7c3aed", "#ea580c",
+    "#dc2626", "#16a34a", "#0a8870", "#9333ea", "#c2410c",
+    "#2563eb", "#b91c1c", "#059669", "#6d28d9", "#ca8a04",
+    "#0369a1", "#a21caf", "#15803d", "#be123c", "#4f46e5",
 ]
 
 
@@ -141,6 +141,7 @@ def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
         f"const COLORS = {json.dumps(colors)};",
         f"const GENES = {json.dumps(genes)};",
         f"const ALIGN_LEN = {meta['alignment_length']};",
+        f"const GAPPED = {json.dumps(data.get('gapped_sequences', {}))};",
         f"const MATRIX = {json.dumps(data['matrix'])};",
         f"const ID_VS_REF = {json.dumps(data['id_vs_ref'])};",
         f"const X_POS = {json.dumps(data['sliding_window']['x_positions'])};",
@@ -204,34 +205,55 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{h_main} {h_coloured}{h_last}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,400&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {{
-    --bg:     #0a0e14;
-    --bg2:    #111620;
-    --bg3:    #1a2030;
-    --bg4:    #222b3a;
-    --border: #2a3548;
-    --text:   #dde4f0;
-    --muted:  #6b7d99;
-    --accent: #4fa3f7;
-    --gold:   #f0b429;
-    --cyan:   #38d9d9;
-    --green:  #4cd964;
-    --coral:  #ff6b6b;
-    --purple: #a78bfa;
-    --teal:   #2ec4b6;
-    --primer-fwd: #f59e0b;
-    --primer-rev: #ec4899;
-    --amplicon:   rgba(250,204,21,0.12);
-    --font-mono: 'JetBrains Mono', monospace;
-    --font-head: 'Syne', sans-serif;
+    /* ── Surfaces ── */
+    --bg:      #f2f4f7;
+    --bg2:     #ffffff;
+    --bg3:     #e8ecf2;
+    --bg4:     #dde2eb;
+    --border:  #c8d0dc;
+    /* ── Text ── */
+    --text:    #1a2535;
+    --dim:     #3d5068;
+    --muted:   #8a9db8;
+    /* ── Semantic colours ── */
+    --accent:  #0da888;
+    --teal:    #0da888;
+    --gold:    #d97706;
+    --cyan:    #0284c7;
+    --green:   #16a34a;
+    --coral:   #dc2626;
+    --purple:  #7c3aed;
+    --orange:  #ea580c;
+    /* ── Primer pair colours ── */
+    --primer-fwd: #d97706;
+    --primer-rev: #0da888;
+    /* ── Transparent variants ── */
+    --green-bg:   rgba(22,163,74,0.1);
+    --gold-bg:    rgba(217,119,6,0.1);
+    --coral-bg:   rgba(220,38,38,0.1);
+    --cyan-bg:    rgba(2,132,199,0.1);
+    --purple-bg:  rgba(124,58,237,0.1);
+    --fwd-bg:     rgba(217,119,6,0.06);
+    --rev-bg:     rgba(13,168,136,0.06);
+    --amplicon:   rgba(13,168,136,0.08);
+    --flag-bg:    rgba(217,119,6,0.12);
+    --diff-bg:    rgba(220,38,38,0.1);
+    --sel-sp:     rgba(22,163,74,0.08);
+    --sel-sp-hov: rgba(22,163,74,0.15);
+    /* ── Typography ── */
+    --font-mono: 'IBM Plex Mono', monospace;
+    --font-head: 'Playfair Display', serif;
+    --font-body: 'IBM Plex Sans', sans-serif;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{
     background: var(--bg);
     color: var(--text);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
+    font-weight: 300;
     min-height: 100vh;
     padding: 28px 28px 40px;
   }}
@@ -263,7 +285,7 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
     background: var(--bg2); border: 1px solid var(--border);
     border-radius: 10px; padding: 18px 20px;
   }}
-  .card.accent-border {{ border-color: rgba(245,158,11,0.4); }}
+  .card.accent-border {{ border-color: var(--gold); }}
   .card-title {{
     font-size: 10px; font-weight: 600; text-transform: uppercase;
     letter-spacing: 1.2px; color: var(--muted); margin-bottom: 14px;
@@ -278,7 +300,7 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
     padding: 12px 14px; cursor: pointer; transition: border-color 0.2s, background 0.2s;
   }}
   .ps-card:hover {{ border-color: var(--accent); background: var(--bg4); }}
-  .ps-card.active {{ border-color: var(--primer-fwd); background: rgba(245,158,11,0.08); }}
+  .ps-card.active {{ border-color: var(--primer-fwd); background: var(--fwd-bg); }}
   .ps-card .ps-name {{
     font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 8px;
     letter-spacing: 0.5px;
@@ -322,7 +344,8 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
 
   /* ── ALIGNMENT ── */
   .aln-viewer {{
-    overflow-x: auto; background: var(--bg); border-radius: 6px;
+    overflow: auto; max-height: 400px;
+    background: var(--bg); border-radius: 6px;
     border: 1px solid var(--border); padding: 12px;
   }}
   .aln-row {{ display: flex; gap: 0; line-height: 1.6; align-items: center; }}
@@ -336,7 +359,7 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
   .aln-primer-fwd {{ color: var(--primer-fwd); font-weight: 700; }}
   .aln-primer-rev {{ color: var(--primer-rev); font-weight: 700; }}
   .aln-match  {{ color: var(--muted); }}
-  .aln-diff   {{ color: var(--coral); font-weight: 700; background: rgba(255,107,107,0.12); border-radius: 2px; }}
+  .aln-diff   {{ color: var(--coral); font-weight: 700; background: var(--diff-bg); border-radius: 2px; }}
   .aln-inner  {{ color: var(--cyan); }}
   .aln-ruler-row {{ margin-bottom: 4px; }}
 
@@ -350,16 +373,16 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
   .hit-table td {{ padding: 7px 10px; border-bottom: 1px solid var(--bg3); vertical-align: middle; }}
   .hit-table tr:last-child td {{ border-bottom: none; }}
   .hit-table tr:hover td {{ background: var(--bg3); }}
-  .hit-table tr.species-selected td {{ background: rgba(34,197,94,0.12); }}
-  .hit-table tr.species-selected:hover td {{ background: rgba(34,197,94,0.2); }}
+  .hit-table tr.species-selected td {{ background: var(--sel-sp); }}
+  .hit-table tr.species-selected:hover td {{ background: var(--sel-sp-hov); }}
   .hit-table tr {{ cursor: pointer; user-select: none; }}
   .mm-badge {{
     display: inline-flex; align-items: center; justify-content: center;
     width: 22px; height: 22px; border-radius: 50%; font-size: 11px; font-weight: 700;
   }}
-  .mm-0 {{ background: rgba(76,217,100,0.2); color: var(--green); }}
-  .mm-1 {{ background: rgba(240,180,41,0.2); color: var(--gold); }}
-  .mm-bad {{ background: rgba(255,107,107,0.2); color: var(--coral); }}
+  .mm-0 {{ background: var(--green-bg); color: var(--green); }}
+  .mm-1 {{ background: var(--gold-bg); color: var(--gold); }}
+  .mm-bad {{ background: var(--coral-bg); color: var(--coral); }}
   .sp-name {{ font-style: italic; }}
   .accession {{ font-size: 9px; color: var(--muted); display: block; margin-top: 1px; }}
 
@@ -446,66 +469,81 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
   </div>
 </div>
 
-<!-- SECTION 1: GENE TRACK + PRIMER LOCATIONS -->
-<div class="section-label">01 · Mitogenome Annotation &amp; Primer Binding Locations</div>
-<div class="card">
-  <div class="card-title"><div class="dot" style="background:var(--accent)"></div>Gene Track ({align_len:,} bp alignment) · click a primer pair to select</div>
-  <div class="track-container" style="position:relative;">
-    <div class="gene-track" id="geneTrack" style="position:relative;overflow:visible;"></div>
-  </div>
-  <div class="gene-axis">{axis_spans}</div>
-  <div style="display:flex;gap:20px;margin-top:8px;flex-wrap:wrap;align-items:center;">
-    <div class="gene-legend" id="geneLegend"></div>
-  </div>
-  <!-- FWD primer track -->
-  <div style="margin-top:14px;">
-    <div style="font-size:9px;color:var(--primer-fwd);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:600;">▶ Forward primers</div>
-    <div id="fwdTrack" style="position:relative;"></div>
-  </div>
-  <!-- REV primer track -->
-  <div style="margin-top:8px;">
-    <div style="font-size:9px;color:var(--primer-rev);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:600;">◀ Reverse primers</div>
-    <div id="revTrack" style="position:relative;min-height:16px;"></div>
-  </div>
-</div>
+<!-- MAIN DASHBOARD GRID — single grid so all 4fr/1fr columns align -->
+<div class="grid" style="grid-template-columns:7fr 3fr;margin-top:14px;align-items:start;">
 
-<!-- Selected primer detail + hit table -->
-<div class="grid grid-2" style="margin-top:14px;">
-  <div class="card accent-border" id="selectedPrimerCard">
-    <div class="card-title"><div class="dot" style="background:var(--primer-fwd)"></div><span id="selectedPrimerTitle">Selected Primer</span></div>
-    <div id="selectedPrimerDetail"></div>
-  </div>
+  <!-- Row 1 left: Variability + Gene Track + Primers -->
   <div class="card">
-    <div class="card-title"><div class="dot" style="background:var(--green)"></div><span id="ampPredTitle">Amplification Prediction · click species to filter primers</span></div>
-    <table class="hit-table">
-      <thead>
-        <tr>
-          <th>Species / Accession</th>
-          <th style="text-align:center">FWD mm</th>
-          <th style="text-align:center">REV mm</th>
-          <th style="text-align:center">Amplicon</th>
-          <th style="text-align:center">Call</th>
-        </tr>
-      </thead>
-      <tbody id="hitTableBody"></tbody>
-    </table>
+    <div class="card-title"><div class="dot" style="background:var(--coral)"></div>Per-Position Variability &amp; Gene Track ({align_len:,} bp)</div>
+    <div style="height:180px;position:relative;"><canvas id="varFullChart"></canvas></div>
+    <div class="gene-axis">{axis_spans}</div>
+    <div style="margin-top:14px;">
+      <div style="font-size:9px;color:var(--primer-fwd);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:600;">▶ Forward primers</div>
+      <div id="fwdTrack" style="position:relative;"></div>
+    </div>
+    <div style="margin-top:8px;">
+      <div style="font-size:9px;color:var(--primer-rev);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:600;">◀ Reverse primers</div>
+      <div id="revTrack" style="position:relative;min-height:16px;"></div>
+    </div>
   </div>
+
+  <!-- Row 1 right: Selected Primer + Amplification Prediction -->
+  <div style="display:flex;flex-direction:column;gap:14px;">
+    <div class="card accent-border" id="selectedPrimerCard">
+      <div class="card-title"><div class="dot" style="background:var(--primer-fwd)"></div><span id="selectedPrimerTitle">Selected Primer</span></div>
+      <div id="selectedPrimerDetail"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><div class="dot" style="background:var(--green)"></div><span id="ampPredTitle">Amplification Prediction · click species to filter primers</span></div>
+      <div style="max-height:400px;overflow-y:auto;">
+        <table class="hit-table">
+          <thead>
+            <tr>
+              <th>Species / Accession</th>
+              <th style="text-align:center">FWD mm</th>
+              <th style="text-align:center">REV mm</th>
+              <th style="text-align:center">Amplicon</th>
+              <th style="text-align:center">Call</th>
+            </tr>
+          </thead>
+          <tbody id="hitTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2 left: Amplicon Alignment -->
+  <div class="card" style="overflow:hidden;">
+    <div class="card-title"><div class="dot" style="background:var(--cyan)"></div>Amplicon Alignment</div>
+    <div style="display:flex;gap:12px;margin-bottom:8px;font-size:9px;flex-wrap:wrap;">
+      <span><span style="color:var(--primer-fwd);font-weight:700">■</span> FWD primer</span>
+      <span><span style="color:var(--primer-rev);font-weight:700">■</span> REV primer</span>
+    </div>
+    <div style="display:flex;">
+      <div style="flex-shrink:0;display:flex;flex-direction:column;">
+        <div id="varYAxis" style="height:60px;flex-shrink:0;display:flex;flex-direction:column;justify-content:space-between;padding-right:4px;text-align:right;font-family:var(--font-mono);font-size:8px;color:var(--muted);">
+          <span>100</span><span>0</span>
+        </div>
+        <div id="alnLabels" style="overflow:hidden;flex:1;min-height:0;"></div>
+      </div>
+      <div style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;" id="alnHScroll">
+        <canvas id="varChart" style="display:block;height:60px;"></canvas>
+        <div id="alnSeqs" style="overflow-y:auto;overflow-x:hidden;max-height:250px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2 right: Amplicon Length Distribution -->
+  <div class="card">
+    <div class="card-title"><div class="dot" style="background:var(--purple)"></div><span id="ampLenTitle">Amplicon Length Distribution</span></div>
+    <div class="chart-h200"><canvas id="ampLenChart"></canvas></div>
+  </div>
+
 </div>
 
-<!-- ecoPCR PANEL (shown if data available) -->
-<div id="ecopcrSection" style="display:none;">
-  <div class="section-label">01b · ecoPCR In Silico Specificity</div>
-  <div class="grid grid-2">
-    <div class="card">
-      <div class="card-title"><div class="dot" style="background:var(--teal)"></div><span id="ecopcrMmTitle">Mismatch Distribution</span></div>
-      <div class="chart-h200"><canvas id="ecopcrMmChart"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-title"><div class="dot" style="background:var(--purple)"></div><span id="ecopcrLenTitle">Amplicon Length Distribution</span></div>
-      <div class="chart-h200"><canvas id="ecopcrLenChart"></canvas></div>
-    </div>
-  </div>
-  <div class="card" style="margin-top:14px;">
+<!-- ROW 4: ecoPCR Hits (full width) -->
+<div style="margin-top:14px;">
+  <div class="card" id="ecopcrSection">
     <div class="card-title"><div class="dot" style="background:var(--teal)"></div><span id="ecopcrTableTitle">ecoPCR Hits</span></div>
     <div style="max-height:300px;overflow-y:auto;">
       <table class="hit-table">
@@ -524,49 +562,6 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
   </div>
 </div>
 
-<!-- SECTION 2: AMPLICON ALIGNMENT -->
-<div class="section-label">02 · Amplicon Sequence Alignment</div>
-<div class="card">
-  <div class="card-title"><div class="dot" style="background:var(--cyan)"></div>Per-base alignment · primers coloured · mismatches highlighted</div>
-  <div class="aln-viewer" id="alnViewer"></div>
-  <div style="display:flex;gap:20px;margin-top:10px;font-size:10px;flex-wrap:wrap;">
-    <span><span style="color:var(--primer-fwd);font-weight:700">■</span> FWD primer</span>
-    <span><span style="color:var(--primer-rev);font-weight:700">■</span> REV primer</span>
-    <span><span style="color:var(--cyan);font-weight:700">■</span> Inner variable region</span>
-    <span><span style="color:var(--coral);font-weight:700;background:rgba(255,107,107,0.15);padding:0 3px;">N</span> Mismatch vs reference</span>
-  </div>
-</div>
-
-<div class="grid grid-2" style="margin-top:14px;">
-  <div class="card">
-    <div class="card-title"><div class="dot" style="background:var(--purple)"></div>Inner Region Identity vs Reference (%)</div>
-    <div class="chart-h200"><canvas id="innerIdChart"></canvas></div>
-  </div>
-  <div class="card">
-    <div class="card-title"><div class="dot" style="background:var(--coral)"></div>Per-position variability within amplicon</div>
-    <div class="chart-h200"><canvas id="varChart"></canvas></div>
-  </div>
-</div>
-
-<!-- SECTION 3: FULL MSA OVERVIEW -->
-<div class="section-label">03 · Full Alignment Overview</div>
-<div class="card">
-  <div class="card-title"><div class="dot" style="background:var(--gold)"></div>Sliding Window Identity vs Reference ({meta['window']} bp window · {meta['step']} bp step)</div>
-  <div class="chart-h240"><canvas id="slidingChart"></canvas></div>
-  <div class="sp-legend" id="speciesLegend"></div>
-</div>
-
-<div class="grid grid-2" style="margin-top:14px;">
-  <div class="card">
-    <div class="card-title"><div class="dot" style="background:var(--green)"></div>Overall Identity vs Reference</div>
-    <div class="id-bars" id="idBars"></div>
-  </div>
-  <div class="card">
-    <div class="card-title"><div class="dot" style="background:var(--coral)"></div>Pairwise Identity Matrix (%)</div>
-    <div style="overflow-x:auto;"><table class="heatmap-table" id="heatmapTable"></table></div>
-  </div>
-</div>
-
 <div class="footnote">
   <em>{ref_species}</em> · {ref_acc} · {len(seq_names)} sequences · {n_primer_sets} primer set(s) analysed
 </div>
@@ -575,6 +570,42 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
 <script>
 // ── DATA ──────────────────────────────────────────────────────────────────────
 {js_data}
+
+// ── THEME (single source of truth for JS colours) ───────────────────────────
+const S = getComputedStyle(document.documentElement);
+const THEME = {{
+  bg: S.getPropertyValue('--bg').trim(),
+  bg2: S.getPropertyValue('--bg2').trim(),
+  bg3: S.getPropertyValue('--bg3').trim(),
+  bg4: S.getPropertyValue('--bg4').trim(),
+  border: S.getPropertyValue('--border').trim(),
+  text: S.getPropertyValue('--text').trim(),
+  muted: S.getPropertyValue('--muted').trim(),
+  accent: S.getPropertyValue('--accent').trim(),
+  gold: S.getPropertyValue('--gold').trim(),
+  cyan: S.getPropertyValue('--cyan').trim(),
+  green: S.getPropertyValue('--green').trim(),
+  coral: S.getPropertyValue('--coral').trim(),
+  purple: S.getPropertyValue('--purple').trim(),
+  teal: S.getPropertyValue('--teal').trim(),
+  fwd: S.getPropertyValue('--primer-fwd').trim(),
+  rev: S.getPropertyValue('--primer-rev').trim(),
+  // Chart defaults
+  gridColor: S.getPropertyValue('--bg3').trim(),
+  tickColor: S.getPropertyValue('--muted').trim(),
+  tooltipBg: S.getPropertyValue('--bg2').trim(),
+  tooltipBorder: S.getPropertyValue('--border').trim(),
+  tooltipTitle: S.getPropertyValue('--text').trim(),
+  tooltipBody: S.getPropertyValue('--dim').trim(),
+  font: 'IBM Plex Mono',
+}};
+// Chart.js defaults
+const CHART_TICK = {{ color: THEME.tickColor, font: {{ family: THEME.font, size: 9 }} }};
+const CHART_TICK_SM = {{ color: THEME.tickColor, font: {{ family: THEME.font, size: 8 }} }};
+const CHART_GRID = {{ color: THEME.gridColor }};
+const CHART_TOOLTIP = {{ backgroundColor: THEME.tooltipBg, borderColor: THEME.tooltipBorder, borderWidth: 1,
+  titleColor: THEME.tooltipTitle, bodyColor: THEME.tooltipBody,
+  titleFont: {{ family: THEME.font, size: 10 }}, bodyFont: {{ family: THEME.font, size: 10 }} }};
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function speciesLabel(name) {{
@@ -700,13 +731,10 @@ function bestHitsForPrimer(seq, isFwd) {{
 }}
 
 function isCompatible(fwdItem, revItem) {{
-  // Compatible if: rev starts after fwd ends, amplicon in range, delta Tm ≤ 5
+  // REV must start after FWD ends (no negative amplicons)
   if (revItem.start <= fwdItem.end) return false;
-  const ampLen = revItem.end - fwdItem.start;
-  if (ampLen < 50 || ampLen > 500) return false;
   const deltaTm = Math.abs(fwdItem.tm - revItem.tm);
-  if (deltaTm > 5) return false;
-  return true;
+  return deltaTm <= 5;
 }}
 
 function hasPrimerSet(fwdItem, revItem) {{
@@ -723,90 +751,88 @@ function buildPrimerTrack() {{
   const selFwd = selectedFwdIdx !== null ? uniqueFwds[selectedFwdIdx] : null;
   const selRev = selectedRevIdx !== null ? uniqueRevs[selectedRevIdx] : null;
 
-  requestAnimationFrame(() => {{
-    const w = trackEl.offsetWidth;
+  // FWD track — row pack using percentages so positions scale with the gene track
+  const fwdSorted = uniqueFwds.map((f, fi) => ({{ ...f, fi }})).sort((a,b) => a.start - b.start);
+  const fwdRows = [];
+  fwdSorted.forEach(item => {{
+    let placed = false;
+    for (let row = 0; row < fwdRows.length; row++) {{
+      if (fwdRows[row] <= item.start) {{ fwdRows[row] = item.end; item.row = row; placed = true; break; }}
+    }}
+    if (!placed) {{ item.row = fwdRows.length; fwdRows.push(item.end); }}
+  }});
+  fwdContainer.style.height = (Math.max(fwdRows.length, 1) * 16 + 2) + 'px';
+  fwdContainer.style.position = 'relative';
 
-    // FWD track — row pack
-    const fwdSorted = uniqueFwds.map((f, fi) => ({{ ...f, fi }})).sort((a,b) => a.start - b.start);
-    const fwdRows = [];
-    fwdSorted.forEach(item => {{
-      let placed = false;
-      for (let row = 0; row < fwdRows.length; row++) {{
-        if (fwdRows[row] <= item.start) {{ fwdRows[row] = item.end; item.row = row; placed = true; break; }}
+  fwdSorted.forEach(item => {{
+    const fi = item.fi;
+    const f = uniqueFwds[fi];
+    const leftPct = (f.start / ALIGN_LEN) * 100;
+    const widthPct = Math.max(0.5, ((f.end - f.start) / ALIGN_LEN) * 100);
+    const isSelected = fi === selectedFwdIdx;
+    const sameTrackGrey = selFwd && !isSelected;
+    const compatible = sameTrackGrey ? false : (selRev ? isCompatible(f, selRev) : true);
+    const ampOk = primerAmplifiesSelected(f.seq, true);
+
+    const bar = document.createElement('div');
+    bar.className = 'primer-bar' + (isSelected ? ' active' : '');
+    bar.style.cssText = `left:${{leftPct}}%;width:${{widthPct}}%;min-width:6px;top:${{item.row * 16}}px;height:14px;`
+      + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-fwd)' : THEME.gold+'99'}};color:#fff;`
+                             : `background:var(--bg4);color:var(--muted);border:1px solid ${{THEME.gold}}66;`);
+    bar.textContent = widthPct > 2 ? f.seq.substring(0,6)+'…' : '';
+    bar.title = `FWD: ${{f.seq}}\nTm: ${{f.tm}}°C · GC: ${{f.gc_pct}}% · ${{f.len}} bp\nUsed by ${{f.indices.length}} pair(s)`;
+    bar.addEventListener('click', () => {{
+      selectedFwdIdx = selectedFwdIdx === fi ? null : fi;
+      syncActivePrimerSet();
+      updateAll();
+    }});
+    fwdContainer.appendChild(bar);
+  }});
+
+  // REV track — row pack using percentages
+  const revSorted = uniqueRevs.map((r, ri) => ({{ ...r, ri }})).sort((a,b) => a.start - b.start);
+  const revRows = [];
+  revSorted.forEach(item => {{
+    let placed = false;
+    for (let row = 0; row < revRows.length; row++) {{
+      if (revRows[row] <= item.start) {{
+        revRows[row] = item.end;
+        item.row = row;
+        placed = true;
+        break;
       }}
-      if (!placed) {{ item.row = fwdRows.length; fwdRows.push(item.end); }}
+    }}
+    if (!placed) {{
+      item.row = revRows.length;
+      revRows.push(item.end);
+    }}
+  }});
+  revContainer.style.height = (Math.max(revRows.length, 1) * 16 + 2) + 'px';
+  revContainer.style.position = 'relative';
+
+  revSorted.forEach(item => {{
+    const ri = item.ri;
+    const r = uniqueRevs[ri];
+    const leftPct = (r.start / ALIGN_LEN) * 100;
+    const widthPct = Math.max(0.5, ((r.end - r.start) / ALIGN_LEN) * 100);
+    const isSelected = ri === selectedRevIdx;
+    const sameTrackGrey = selRev && !isSelected;
+    const compatible = sameTrackGrey ? false : (selFwd ? isCompatible(selFwd, r) : true);
+    const ampOk = primerAmplifiesSelected(r.seq, false);
+
+    const bar = document.createElement('div');
+    bar.className = 'primer-bar' + (isSelected ? ' active' : '');
+    bar.style.cssText = `left:${{leftPct}}%;width:${{widthPct}}%;min-width:6px;top:${{item.row * 16}}px;height:14px;`
+      + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-rev)' : THEME.teal+'99'}};color:#fff;`
+                             : `background:var(--bg4);color:var(--muted);border:1px solid ${{THEME.teal}}66;`);
+    bar.textContent = widthPct > 2 ? r.seq.substring(0,6)+'…' : '';
+    bar.title = `REV: ${{r.seq}}\nTm: ${{r.tm}}°C · GC: ${{r.gc_pct}}% · ${{r.len}} bp\nUsed by ${{r.indices.length}} pair(s)`;
+    bar.addEventListener('click', () => {{
+      selectedRevIdx = selectedRevIdx === ri ? null : ri;
+      syncActivePrimerSet();
+      updateAll();
     }});
-    fwdContainer.style.height = (Math.max(fwdRows.length, 1) * 16 + 2) + 'px';
-    fwdContainer.style.position = 'relative';
-
-    fwdSorted.forEach(item => {{
-      const fi = item.fi;
-      const f = uniqueFwds[fi];
-      const left = (f.start / ALIGN_LEN) * w;
-      const width = Math.max(8, ((f.end - f.start) / ALIGN_LEN) * w);
-      const isSelected = fi === selectedFwdIdx;
-      const compatible = selRev ? isCompatible(f, selRev) : true;
-      const ampOk = primerAmplifiesSelected(f.seq, true);
-
-      const bar = document.createElement('div');
-      bar.className = 'primer-bar' + (isSelected ? ' active' : '');
-      bar.style.cssText = `left:${{left}}px;width:${{width}}px;top:${{item.row * 16}}px;height:14px;`
-        + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-fwd)' : 'rgba(245,158,11,0.6)'}};color:#000;`
-                               : `background:var(--bg4);color:var(--muted);border:1px solid rgba(245,158,11,0.5);`);
-      bar.textContent = width > 30 ? f.seq.substring(0,6)+'…' : '';
-      bar.title = `FWD: ${{f.seq}}\nTm: ${{f.tm}}°C · GC: ${{f.gc_pct}}% · ${{f.len}} bp\nUsed by ${{f.indices.length}} pair(s)`;
-      bar.addEventListener('click', () => {{
-        selectedFwdIdx = selectedFwdIdx === fi ? null : fi;
-        syncActivePrimerSet();
-        updateAll();
-      }});
-      fwdContainer.appendChild(bar);
-    }});
-
-    // REV track — row pack since they can overlap
-    const revSorted = uniqueRevs.map((r, ri) => ({{ ...r, ri }})).sort((a,b) => a.start - b.start);
-    const revRows = [];
-    revSorted.forEach(item => {{
-      let placed = false;
-      for (let row = 0; row < revRows.length; row++) {{
-        if (revRows[row] <= item.start) {{
-          revRows[row] = item.end;
-          item.row = row;
-          placed = true;
-          break;
-        }}
-      }}
-      if (!placed) {{
-        item.row = revRows.length;
-        revRows.push(item.end);
-      }}
-    }});
-    revContainer.style.height = (Math.max(revRows.length, 1) * 16 + 2) + 'px';
-    revContainer.style.position = 'relative';
-
-    revSorted.forEach(item => {{
-      const ri = item.ri;
-      const r = uniqueRevs[ri];
-      const left = (r.start / ALIGN_LEN) * w;
-      const width = Math.max(8, ((r.end - r.start) / ALIGN_LEN) * w);
-      const isSelected = ri === selectedRevIdx;
-      const compatible = selFwd ? isCompatible(selFwd, r) : true;
-      const ampOk = primerAmplifiesSelected(r.seq, false);
-
-      const bar = document.createElement('div');
-      bar.className = 'primer-bar' + (isSelected ? ' active' : '');
-      bar.style.cssText = `left:${{left}}px;width:${{width}}px;top:${{item.row * 16}}px;height:14px;`
-        + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-rev)' : 'rgba(236,72,153,0.6)'}};color:#fff;`
-                               : `background:var(--bg4);color:var(--muted);border:1px solid rgba(236,72,153,0.5);`);
-      bar.textContent = width > 30 ? r.seq.substring(0,6)+'…' : '';
-      bar.title = `REV: ${{r.seq}}\nTm: ${{r.tm}}°C · GC: ${{r.gc_pct}}% · ${{r.len}} bp\nUsed by ${{r.indices.length}} pair(s)`;
-      bar.addEventListener('click', () => {{
-        selectedRevIdx = selectedRevIdx === ri ? null : ri;
-        syncActivePrimerSet();
-        updateAll();
-      }});
-      revContainer.appendChild(bar);
-    }});
+    revContainer.appendChild(bar);
   }});
 }}
 
@@ -847,8 +873,9 @@ function buildSelectedDetail() {{
   const deltaTm = Math.abs(fwd.tm - rev.tm).toFixed(1);
   const tmIncompatible = parseFloat(deltaTm) > 5;
   const ps = paired ? PS() : null;
-  const ampCount = ps ? Object.values(ps.hit_summary).filter(h => h.has_amp).length : '?';
-  const pairName = ps ? ps.name : (tmIncompatible ? 'Incompatible pair' : 'Untested pair');
+  const tested = ps && Object.values(ps.hit_summary).some(h => h.has_amp || h.fwd_mm < 99);
+  const ampCount = tested ? Object.values(ps.hit_summary).filter(h => h.has_amp).length : null;
+  const pairName = ps && tested ? ps.name : (tmIncompatible ? 'Incompatible pair' : 'Untested pair');
 
   // Get thermo values from the PS if available, else compute what we can
   const fHairpin = ps ? ps.fwd_hairpin : '—';
@@ -865,7 +892,7 @@ function buildSelectedDetail() {{
   const hasFlag = f => flags.includes(f);
 
   function sv(val, unit) {{ return typeof val === 'number' ? val.toFixed(1) + unit : val; }}
-  function flagBg(flagName) {{ return hasFlag(flagName) ? 'background:rgba(245,158,11,0.15);border-radius:4px;padding:1px 4px;' : ''; }}
+  function flagBg(flagName) {{ return hasFlag(flagName) ? 'background:var(--flag-bg);border-radius:4px;padding:1px 4px;' : ''; }}
 
   title.textContent = pairName.replace(/_/g, ' ');
 
@@ -897,8 +924,8 @@ function buildSelectedDetail() {{
     <div style="background:var(--bg3);border-radius:6px;padding:8px 12px;display:flex;gap:16px;flex-wrap:wrap;">
       <span class="pstat" style="${{flagBg('delta_tm_too_high')}}">ΔTm <b style="color:${{parseFloat(deltaTm) <= 2 ? 'var(--green)' : parseFloat(deltaTm) <= 5 ? 'var(--gold)' : 'var(--coral)'}}">${{deltaTm}}°C</b></span>
       ${{ps ? `<span class="pstat" style="${{flagBg('heterodimer')}}">heterodimer <b>${{sv(hetero, '')}}</b></span>` : ''}}
-      <span class="pstat">Amplicon <b style="color:var(--gold)">${{ampLen}} bp</b></span>
-      <span class="pstat">Amplifies <b style="color:${{ampCount !== '?' && ampCount > 0 ? 'var(--green)' : ampCount === '?' ? 'var(--muted)' : 'var(--coral)'}}">${{ampCount}}${{ampCount !== '?' ? '/' + SEQ_NAMES.length : ''}}</b></span>
+      <span class="pstat">Amplicon <b style="color:var(--gold)">${{ampLen > 0 ? ampLen + ' bp' : '—'}}</b></span>
+      <span class="pstat">Amplifies <b style="color:${{ampCount !== null && ampCount > 0 ? 'var(--green)' : ampCount === null ? 'var(--muted)' : 'var(--coral)'}}">${{ampCount !== null ? ampCount + '/' + SEQ_NAMES.length : 'Not tested'}}</b></span>
       ${{ps && ps.ecopcr ? `<span class="pstat">Off-target <b style="color:var(--teal)">${{ps.ecopcr.total_hits}}/${{ps.ecopcr.db_sequences}}</b></span>` : ''}}
       ${{tmIncompatible ? '<span class="pstat"><b style="color:var(--coral)">ΔTm incompatible</b></span>' : ''}}
     </div>
@@ -911,8 +938,7 @@ function updateAll() {{
   buildHitTable();
   buildEcoPCR();
   buildAlignment();
-  rebuildInnerIdChart();
-  rebuildVarChart();
+  buildAmpLenChart();
 }}
 
 function selectPrimerSet(idx) {{
@@ -938,9 +964,23 @@ function buildHitTable() {{
   const paired = currentPairMatches();
   const ps = paired ? PS() : null;
 
-  // If no exact pair, gather per-primer mismatch data independently
-  const fwdHits = !paired && selectedFwdIdx !== null ? bestHitsForPrimer(uniqueFwds[selectedFwdIdx].seq, true) : null;
-  const revHits = !paired && selectedRevIdx !== null ? bestHitsForPrimer(uniqueRevs[selectedRevIdx].seq, false) : null;
+  // Always gather per-primer best mismatch data (used for untested pairs AND
+  // tested pairs where obipcr found no amplicon but individual primers do bind)
+  const fwdHits = selectedFwdIdx !== null ? bestHitsForPrimer(uniqueFwds[selectedFwdIdx].seq, true) : null;
+  const revHits = selectedRevIdx !== null ? bestHitsForPrimer(uniqueRevs[selectedRevIdx].seq, false) : null;
+
+  // Estimate amplicon length from gapped coords
+  const selF = selectedFwdIdx !== null ? uniqueFwds[selectedFwdIdx] : null;
+  const selR = selectedRevIdx !== null ? uniqueRevs[selectedRevIdx] : null;
+  const estAmp = (selF && selR && selR.end > selF.start) ? (selR.end - selF.start) : null;
+
+  // Check if obipcr found ANY binding for this pair across all species.
+  // If all species have fwd_mm=99 and rev_mm=99, obipcr effectively didn't test it
+  // (e.g. amplicon outside the configured size range).
+  const pairAllBlank = ps ? SEQ_NAMES.every(n => {{
+    const h = ps.hit_summary[n];
+    return h && !h.has_amp && h.fwd_mm >= 99 && h.rev_mm >= 99;
+  }}) : true;
 
   SEQ_NAMES.forEach(name => {{
     const {{sp, acc, isRef}} = speciesLabel(name);
@@ -950,47 +990,42 @@ function buildHitTable() {{
     if (isSel) tr.classList.add('species-selected');
     const selIcon = isSel ? '<span style="color:var(--green);margin-right:4px">●</span>' : '<span style="color:var(--muted);margin-right:4px">○</span>';
 
-    if (ps) {{
-      // Exact pair match — full data
-      const h = ps.hit_summary[name];
-      if (h.has_amp) {{
-        const fCls = h.fwd_mm === 0 ? 'mm-0' : h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad';
-        const rCls = h.rev_mm === 0 ? 'mm-0' : h.rev_mm <= 1 ? 'mm-1' : 'mm-bad';
-        tr.innerHTML = `
-          <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
-          <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{h.fwd_mm}}</span></td>
-          <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{h.rev_mm}}</span></td>
-          <td style="text-align:center;color:var(--gold)">${{h.amp_len}} bp</td>
-          <td style="text-align:center;color:var(--green);font-weight:700">✓ YES</td>`;
-      }} else {{
-        const fmm = h.fwd_mm >= 99 ? '—' : h.fwd_mm;
-        const rmm = h.rev_mm >= 99 ? '—' : h.rev_mm;
-        const fCls = h.fwd_mm >= 99 ? 'mm-bad' : (h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad');
-        const rCls = h.rev_mm >= 99 ? 'mm-bad' : (h.rev_mm <= 1 ? 'mm-1' : 'mm-bad');
-        tr.innerHTML = `
-          <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
-          <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{fmm}}</span></td>
-          <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{rmm}}</span></td>
-          <td style="text-align:center;color:var(--muted)">—</td>
-          <td style="text-align:center;color:var(--coral);font-weight:700">✗ NO</td>`;
-      }}
+    // Per-primer mismatch data — always available regardless of pair
+    const fh = fwdHits ? fwdHits[name] : null;
+    const rh = revHits ? revHits[name] : null;
+    const fmm = fh ? fh.fwd_mm : null;
+    const rmm = rh ? rh.rev_mm : null;
+    const fDisp = fmm !== null && fmm < 99 ? fmm : '—';
+    const rDisp = rmm !== null && rmm < 99 ? rmm : '—';
+    const fCls = fmm === null || fmm >= 99 ? 'mm-bad' : (fmm === 0 ? 'mm-0' : fmm <= 1 ? 'mm-1' : 'mm-bad');
+    const rCls = rmm === null || rmm >= 99 ? 'mm-bad' : (rmm === 0 ? 'mm-0' : rmm <= 1 ? 'mm-1' : 'mm-bad');
+
+    // Determine call: YES / NO / Not tested
+    // A pair is only meaningfully tested if obipcr actually found primer binding
+    // (not all mm=99). Pairs outside the amplicon range get all-99 and aren't real tests.
+    const pairHit = ps && ps.hit_summary[name];
+    const hasAmp = pairHit && pairHit.has_amp;
+    const reallyTested = pairHit && !pairAllBlank;
+
+    const ampDisp = hasAmp ? pairHit.amp_len + ' bp'
+                   : estAmp ? `~${{estAmp}} bp` : '—';
+    const ampStyle = hasAmp ? 'color:var(--gold)' : 'color:var(--muted)';
+
+    let callHtml;
+    if (hasAmp) {{
+      callHtml = '<span style="color:var(--green);font-weight:700">✓ YES</span>';
+    }} else if (reallyTested) {{
+      callHtml = '<span style="color:var(--coral);font-weight:700">✗ NO</span>';
     }} else {{
-      // No exact pair — show individual primer mismatch data
-      const fh = fwdHits ? fwdHits[name] : null;
-      const rh = revHits ? revHits[name] : null;
-      const fmm = fh ? fh.fwd_mm : null;
-      const rmm = rh ? rh.rev_mm : null;
-      const fDisp = fmm !== null && fmm < 99 ? fmm : '—';
-      const rDisp = rmm !== null && rmm < 99 ? rmm : '—';
-      const fCls = fmm === null || fmm >= 99 ? 'mm-bad' : (fmm === 0 ? 'mm-0' : fmm <= 1 ? 'mm-1' : 'mm-bad');
-      const rCls = rmm === null || rmm >= 99 ? 'mm-bad' : (rmm === 0 ? 'mm-0' : rmm <= 1 ? 'mm-1' : 'mm-bad');
-      tr.innerHTML = `
-        <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
-        <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{fDisp}}</span></td>
-        <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{rDisp}}</span></td>
-        <td style="text-align:center;color:var(--muted)">—</td>
-        <td style="text-align:center;color:var(--muted);font-weight:700">?</td>`;
+      callHtml = '<span style="color:var(--muted);font-size:9px">Not tested</span>';
     }}
+
+    tr.innerHTML = `
+      <td>${{selIcon}}<span class="sp-name"${{spStyle}}>${{sp}}</span><span class="accession">${{acc}}</span></td>
+      <td style="text-align:center"><span class="mm-badge ${{fCls}}">${{fDisp}}</span></td>
+      <td style="text-align:center"><span class="mm-badge ${{rCls}}">${{rDisp}}</span></td>
+      <td style="text-align:center;${{ampStyle}}">${{ampDisp}}</td>
+      <td style="text-align:center">${{callHtml}}</td>`;
     tr.addEventListener('click', () => {{
       if (selectedSpecies.has(name)) selectedSpecies.delete(name);
       else selectedSpecies.add(name);
@@ -1002,95 +1037,23 @@ function buildHitTable() {{
 }}
 
 // ── ecoPCR PANEL (rebuilt on switch) ─────────────────────────────────────────
-let ecopcrMmChartObj = null;
-let ecopcrLenChartObj = null;
 function buildEcoPCR() {{
   const section = document.getElementById('ecopcrSection');
   const ps = PS();
   const eco = ps.ecopcr;
 
+  const tbody = document.getElementById('ecopcrTableBody');
+  tbody.innerHTML = '';
+
   if (!eco || eco.total_hits === 0) {{
-    section.style.display = 'none';
+    document.getElementById('ecopcrTableTitle').textContent = 'ecoPCR Hits · No data';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;">No off-target database provided or no hits for this primer pair</td></tr>';
     return;
   }}
-  section.style.display = '';
 
-  const pctHit = (eco.total_hits / eco.db_sequences * 100).toFixed(1);
-  document.getElementById('ecopcrMmTitle').textContent =
-    `Mismatch Distribution · ${{eco.total_hits}}/${{eco.db_sequences}} amplify (${{pctHit}}%)`;
-  document.getElementById('ecopcrLenTitle').textContent =
-    `Amplicon Length Distribution · ${{eco.amp_len_min}}–${{eco.amp_len_max}} bp (median ${{eco.amp_len_median}})`;
   document.getElementById('ecopcrTableTitle').textContent =
     `ecoPCR Hits · ${{eco.total_hits}} sequences from ${{eco.db_sequences}} in database`;
 
-  // ── Mismatch bar chart
-  if (ecopcrMmChartObj) {{ ecopcrMmChartObj.destroy(); ecopcrMmChartObj = null; }}
-  const mmLabels = Object.keys(eco.mismatch_counts).sort();
-  const mmData = mmLabels.map(k => eco.mismatch_counts[k]);
-  const mmColors = mmLabels.map(k => {{
-    const [f,r] = k.split('+').map(Number);
-    if (f+r === 0) return 'rgba(76,217,100,0.8)';
-    if (f+r <= 1) return 'rgba(240,180,41,0.8)';
-    if (f+r <= 2) return 'rgba(79,163,247,0.8)';
-    return 'rgba(255,107,107,0.8)';
-  }});
-  const mmCtx = document.getElementById('ecopcrMmChart').getContext('2d');
-  ecopcrMmChartObj = new Chart(mmCtx, {{
-    type: 'bar',
-    data: {{
-      labels: mmLabels.map(k => k.replace('+', ' + ') + ' mm'),
-      datasets: [{{ data: mmData, backgroundColor: mmColors, borderWidth: 0, borderRadius: 3 }}]
-    }},
-    options: {{
-      responsive: true, maintainAspectRatio: false,
-      scales: {{
-        y: {{ title: {{ display: true, text: 'Sequences', color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, grid: {{ color: '#1a2030' }} }},
-        x: {{ ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 8 }}, maxRotation: 45 }}, grid: {{ display: false }} }}
-      }},
-      plugins: {{ legend: {{ display: false }},
-        tooltip: {{ backgroundColor: '#111620', borderColor: '#2a3548', borderWidth: 1,
-          titleFont: {{ family: 'JetBrains Mono', size: 10 }}, bodyFont: {{ family: 'JetBrains Mono', size: 10 }},
-          callbacks: {{ label: i => ` ${{i.parsed.y}} sequences (${{(i.parsed.y/eco.total_hits*100).toFixed(1)}}%)` }}
-        }}
-      }}
-    }}
-  }});
-
-  // ── Amplicon length histogram
-  if (ecopcrLenChartObj) {{ ecopcrLenChartObj.destroy(); ecopcrLenChartObj = null; }}
-  const lengths = eco.amp_lengths;
-  const minL = Math.min(...lengths), maxL = Math.max(...lengths);
-  const binSize = Math.max(1, Math.ceil((maxL - minL + 1) / 20));
-  const bins = {{}};
-  lengths.forEach(l => {{
-    const bin = Math.floor((l - minL) / binSize) * binSize + minL;
-    bins[bin] = (bins[bin] || 0) + 1;
-  }});
-  const binKeys = Object.keys(bins).map(Number).sort((a,b) => a-b);
-  const lenCtx = document.getElementById('ecopcrLenChart').getContext('2d');
-  ecopcrLenChartObj = new Chart(lenCtx, {{
-    type: 'bar',
-    data: {{
-      labels: binKeys.map(k => binSize === 1 ? `${{k}}` : `${{k}}–${{k+binSize-1}}`),
-      datasets: [{{ data: binKeys.map(k => bins[k]), backgroundColor: 'rgba(167,139,250,0.7)', borderWidth: 0, borderRadius: 3, barPercentage: 1.0, categoryPercentage: 0.9 }}]
-    }},
-    options: {{
-      responsive: true, maintainAspectRatio: false,
-      scales: {{
-        y: {{ title: {{ display: true, text: 'Sequences', color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, grid: {{ color: '#1a2030' }} }},
-        x: {{ title: {{ display: true, text: 'Amplicon length (bp, primers excluded)', color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 8 }}, maxRotation: 45 }}, grid: {{ display: false }} }}
-      }},
-      plugins: {{ legend: {{ display: false }},
-        tooltip: {{ backgroundColor: '#111620', borderColor: '#2a3548', borderWidth: 1,
-          titleFont: {{ family: 'JetBrains Mono', size: 10 }}, bodyFont: {{ family: 'JetBrains Mono', size: 10 }}
-        }}
-      }}
-    }}
-  }});
-
-  // ── Hits table
-  const tbody = document.getElementById('ecopcrTableBody');
-  tbody.innerHTML = '';
   eco.hits.sort((a,b) => (a.fwd_mm + a.rev_mm) - (b.fwd_mm + b.rev_mm)).forEach(h => {{
     const tr = document.createElement('tr');
     const fCls = h.fwd_mm === 0 ? 'mm-0' : h.fwd_mm <= 1 ? 'mm-1' : 'mm-bad';
@@ -1105,299 +1068,312 @@ function buildEcoPCR() {{
   }});
 }}
 
-// ── GENE TRACK (built once) ──────────────────────────────────────────────────
-function buildGeneTrack() {{
-  const track = document.getElementById('geneTrack');
-  const legend = document.getElementById('geneLegend');
-  const seen = new Set();
-  GENES.forEach(g => {{
-    const pct = (g.end - g.start) / ALIGN_LEN * 100;
-    const el = document.createElement('div');
-    el.className = 'gene-seg';
-    el.style.cssText = `width:${{pct}}%;background:${{g.color}};flex-shrink:0;`;
-    el.textContent = pct > 3 ? g.name : '';
-    el.title = `${{g.name}}: ${{g.start}}–${{g.end}} (${{g.end-g.start}} bp)`;
-    track.appendChild(el);
-    if (!seen.has(g.name)) {{
-      seen.add(g.name);
-      const li = document.createElement('div');
-      li.className = 'leg-item';
-      li.innerHTML = `<div class="leg-swatch" style="background:${{g.color}}"></div>${{g.name}}`;
-      legend.appendChild(li);
-    }}
-  }});
+
+
+// ── AMPLICON ALIGNMENT + PER-AMPLICON VARIABILITY ───────────────────────────
+// Measure one monospace character width (cached)
+let _charW = null;
+function charWidth() {{
+  if (_charW) return _charW;
+  const span = document.createElement('span');
+  span.style.cssText = 'font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.2px;position:absolute;visibility:hidden;white-space:pre;';
+  span.textContent = 'A';
+  document.body.appendChild(span);
+  _charW = span.getBoundingClientRect().width;
+  document.body.removeChild(span);
+  return _charW;
 }}
 
-
-// ── AMPLICON ALIGNMENT (rebuilt on switch) ───────────────────────────────────
 function buildAlignment() {{
-  const container = document.getElementById('alnViewer');
-  container.innerHTML = '';
-  const paired = currentPairMatches();
-  const ps = PS();
-  const amps = ps.amplicons;
-  const refAmp = amps[SEQ_NAMES[0]];
-  if (!paired) {{
-    container.innerHTML = '<div class="no-amp-msg">No amplicon data for this combination — select a tested FWD+REV pair to view alignment</div>';
+  const labels = document.getElementById('alnLabels');
+  const seqs = document.getElementById('alnSeqs');
+  const canvas = document.getElementById('varChart');
+  labels.innerHTML = '';
+  seqs.innerHTML = '';
+
+  const fwd = selectedFwdIdx !== null ? uniqueFwds[selectedFwdIdx] : null;
+  const rev = selectedRevIdx !== null ? uniqueRevs[selectedRevIdx] : null;
+
+  if (!fwd || !rev || !Object.keys(GAPPED).length) {{
+    seqs.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Select a FWD and REV primer</div>';
+    canvas.width = 0;
     return;
   }}
-  if (!refAmp) {{
-    container.innerHTML = '<div class="no-amp-msg"><b>No amplicon</b> found in reference for this primer set</div>';
+
+  const start = fwd.start;
+  const end = rev.end;
+  if (end <= start) {{
+    seqs.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">REV is before FWD</div>';
+    canvas.width = 0;
     return;
   }}
-  const ref = refAmp.toUpperCase();
-  const fwdLen = ps.fwd_len, revLen = ps.rev_len, ampLen = ref.length;
 
-  // Ruler
-  const rulerRow = document.createElement('div');
-  rulerRow.className = 'aln-row aln-ruler-row';
-  const rulerLabel = document.createElement('div');
-  rulerLabel.className = 'aln-label';
-  rulerLabel.style.cssText = 'font-size:9px;color:var(--muted);text-align:right;padding-right:10px;';
-  rulerLabel.textContent = 'pos';
-  rulerRow.appendChild(rulerLabel);
-  const rulerSeq = document.createElement('div');
-  rulerSeq.className = 'aln-seq';
-  rulerSeq.style.cssText = 'font-size:9px;color:var(--muted);letter-spacing:1.2px;';
-  let ruler = '';
-  for (let i = 0; i < ampLen; i++) {{
-    if (i % 10 === 0) {{ ruler += `<span style="color:var(--accent)">${{String(i).padStart(2,'0')}}</span>`; i += String(i).length - 1; }}
-    else ruler += '·';
-  }}
-  rulerSeq.innerHTML = ruler;
-  rulerRow.appendChild(rulerSeq);
-  container.appendChild(rulerRow);
+  const fwdEnd = fwd.end;
+  const revStart = rev.start;
+  const regionLen = end - start;
+  const cw = charWidth();
+  const totalSeqWidth = regionLen * cw;
 
+  // Build labels and sequence rows
   SEQ_NAMES.forEach(name => {{
-    const raw = amps[name];
-    if (!raw) return;
-    const amp = raw.toUpperCase();
-    const row = document.createElement('div');
-    row.className = 'aln-row';
-    const label = document.createElement('div');
-    label.className = 'aln-label' + (name.includes('REF') ? ' ref' : '');
-    label.style.color = COLORS[name];
-    label.textContent = SHORT[name];
-    row.appendChild(label);
+    const fullSeq = GAPPED[name];
+    if (!fullSeq) return;
+    const slice = fullSeq.substring(start, end).toUpperCase();
+
+    // Label
+    const lbl = document.createElement('div');
+    lbl.style.cssText = `font-size:10px;color:${{COLORS[name]}};padding-right:8px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.7;width:140px;`;
+    if (name.includes('REF')) lbl.style.fontWeight = '600';
+    lbl.textContent = SHORT[name];
+    labels.appendChild(lbl);
+
+    // Sequence
     const seqEl = document.createElement('div');
-    seqEl.className = 'aln-seq';
+    seqEl.style.cssText = `font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.2px;white-space:pre;line-height:1.7;width:${{totalSeqWidth}}px;`;
     let html = '';
-    for (let i = 0; i < amp.length; i++) {{
-      const c = amp[i], r = ref[i];
-      if (i < fwdLen) {{
-        html += `<span class="aln-primer-fwd${{c !== r ? ' aln-diff' : ''}}">${{c}}</span>`;
-      }} else if (i >= ampLen - revLen) {{
-        html += `<span class="aln-primer-rev${{c !== r ? ' aln-diff' : ''}}">${{c}}</span>`;
+    for (let i = 0; i < slice.length; i++) {{
+      const gPos = start + i;
+      const c = slice[i];
+      if (gPos < fwdEnd) {{
+        html += `<span style="color:var(--primer-fwd);font-weight:700">${{c}}</span>`;
+      }} else if (gPos >= revStart) {{
+        html += `<span style="color:var(--primer-rev);font-weight:700">${{c}}</span>`;
       }} else {{
-        if (c === r || name.includes('REF')) html += `<span class="aln-inner">${{c}}</span>`;
-        else html += `<span class="aln-diff">${{c}}</span>`;
+        html += `<span style="color:var(--text)">${{c}}</span>`;
       }}
     }}
     seqEl.innerHTML = html;
-    row.appendChild(seqEl);
-    container.appendChild(row);
+    seqs.appendChild(seqEl);
   }});
+
+  // Set explicit width so alnHScroll knows the content width
+  seqs.style.width = totalSeqWidth + 'px';
+
+  // Sync vertical scroll: labels track sequences
+  seqs.onscroll = () => {{ labels.scrollTop = seqs.scrollTop; }};
+
+  // Draw variability directly on canvas — one bar per character position
+  const allSeqs = SEQ_NAMES.map(n => GAPPED[n]).filter(Boolean);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(totalSeqWidth * dpr);
+  canvas.height = Math.round(60 * dpr);
+  canvas.style.width = totalSeqWidth + 'px';
+  canvas.style.height = '60px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const h = 60;
+
+  for (let i = 0; i < regionLen; i++) {{
+    const gPos = start + i;
+    const counts = {{}};
+    let total = 0;
+    allSeqs.forEach(s => {{
+      const b = s[gPos];
+      if (b && b !== '-' && b !== '.') {{ counts[b] = (counts[b] || 0) + 1; total++; }}
+    }});
+    let pct = 0;
+    if (total > 1) {{
+      const maxCount = Math.max(...Object.values(counts));
+      pct = ((total - maxCount) / total) * 100;
+    }}
+    const barH = (pct / 100) * h;
+    const x = i * cw;
+    // Colour: primer regions use primer colours, inner uses coral
+    if (gPos < fwdEnd) ctx.fillStyle = THEME.gold + '99';
+    else if (gPos >= revStart) ctx.fillStyle = THEME.teal + '99';
+    else ctx.fillStyle = pct > 0 ? THEME.coral + 'cc' : THEME.coral + '18';
+    ctx.fillRect(x, h - barH, cw - 0.5, barH);
+  }}
 }}
 
-// ── INNER ID CHART (rebuilt on switch) ───────────────────────────────────────
-let innerIdChartObj = null;
-function rebuildInnerIdChart() {{
-  if (innerIdChartObj) {{ innerIdChartObj.destroy(); innerIdChartObj = null; }}
-  if (!currentPairMatches()) {{
-    document.getElementById('innerIdChart').getContext('2d').clearRect(0,0,9999,9999);
-    return;
+// ── FULL-ALIGNMENT VARIABILITY CHART (built once, shares x-axis with gene track) ──
+function buildVariabilityChart() {{
+  if (!Object.keys(GAPPED).length) return;
+  const allSeqs = SEQ_NAMES.map(n => GAPPED[n]).filter(Boolean);
+  if (allSeqs.length < 2) return;
+
+  // Compute per-position variability: at each column, what fraction of sequences
+  // differ from the most common base (consensus variability, not vs reference)
+  const varScore = [];
+  for (let i = 0; i < ALIGN_LEN; i++) {{
+    const counts = {{}};
+    let total = 0;
+    allSeqs.forEach(s => {{
+      const b = s[i];
+      if (b && b !== '-' && b !== '.') {{
+        counts[b] = (counts[b] || 0) + 1;
+        total++;
+      }}
+    }});
+    if (total <= 1) {{ varScore.push(0); continue; }}
+    const maxCount = Math.max(...Object.values(counts));
+    varScore.push(((total - maxCount) / total) * 100);
   }}
-  const ps = PS();
-  const refAmp = ps.amplicons[SEQ_NAMES[0]];
-  if (!refAmp) {{
-    document.getElementById('innerIdChart').getContext('2d').clearRect(0,0,9999,9999);
-    return;
+
+  // Gene track plugin — draws coloured gene segments in the bottom strip of the chart
+  const geneTrackHeight = 28;
+  const geneTrackPlugin = {{
+    id: 'geneTrack',
+    afterDraw(chart) {{
+      const {{ ctx, chartArea: {{ left, right, bottom }}, scales: {{ x }} }} = chart;
+      const trackTop = bottom + 4;
+      const trackBot = trackTop + geneTrackHeight;
+      ctx.save();
+      GENES.forEach(g => {{
+        const x0 = x.getPixelForValue(g.start);
+        const x1 = x.getPixelForValue(g.end);
+        const w = x1 - x0;
+        ctx.fillStyle = g.color;
+        ctx.fillRect(x0, trackTop, w, geneTrackHeight);
+        // Label major regions (not tRNAs) if wide enough
+        const isMajor = !g.name.startsWith('t') || g.name === 'tRNA';
+        if (isMajor && w > 30) {{
+          ctx.fillStyle = 'rgba(0,0,0,0.75)';
+          ctx.font = '700 8.5px IBM Plex Mono, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(g.name, x0 + w / 2, trackTop + geneTrackHeight / 2);
+        }}
+      }});
+      ctx.restore();
+    }}
+  }};
+
+  // Tooltip: include gene name when hovering
+  function geneAtPos(pos) {{
+    for (const g of GENES) {{ if (pos >= g.start && pos < g.end) return g.name; }}
+    return null;
   }}
-  const ref = refAmp.toUpperCase();
-  const fwdLen = ps.fwd_len, revLen = ps.rev_len;
-  const innerRef = ref.substring(fwdLen, ref.length - revLen);
-  const innerIds = {{}};
-  SEQ_NAMES.forEach(name => {{
-    const a = ps.amplicons[name];
-    if (!a) {{ innerIds[name] = 0; return; }}
-    const inner = a.toUpperCase().substring(fwdLen, a.length - revLen);
-    let m = 0, t = 0;
-    for (let i = 0; i < innerRef.length; i++) {{ t++; if (inner[i] === innerRef[i]) m++; }}
-    innerIds[name] = t > 0 ? Math.round(m / t * 1000) / 10 : 0;
-  }});
-  const ctx = document.getElementById('innerIdChart').getContext('2d');
-  innerIdChartObj = new Chart(ctx, {{
-    type: 'bar',
+
+  const ctx = document.getElementById('varFullChart').getContext('2d');
+  new Chart(ctx, {{
+    type: 'line',
     data: {{
-      labels: SEQ_NAMES.map(n => SHORT[n]),
-      datasets: [{{ data: SEQ_NAMES.map(n => innerIds[n] || 0), backgroundColor: SEQ_NAMES.map(n => COLORS[n] + 'cc'), borderColor: SEQ_NAMES.map(n => COLORS[n]), borderWidth: 1, borderRadius: 3 }}]
+      datasets: [{{
+        data: varScore.map((v, i) => ({{x: i, y: v}})),
+        borderColor: THEME.coral,
+        backgroundColor: THEME.coral + '18',
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.1
+      }}]
     }},
+    plugins: [geneTrackPlugin],
     options: {{
       responsive: true, maintainAspectRatio: false,
+      layout: {{ padding: {{ bottom: geneTrackHeight + 8, left: 0, right: 0, top: 0 }} }},
       scales: {{
-        y: {{ min: 80, max: 101, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, grid: {{ color: '#1a2030' }} }},
-        x: {{ ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 8 }}, maxRotation: 40 }}, grid: {{ display: false }} }}
+        x: {{ type: 'linear', min: 0, max: ALIGN_LEN, display: false }},
+        y: {{ min: 0, max: 100, display: false }}
       }},
-      plugins: {{ legend: {{ display: false }}, tooltip: {{ backgroundColor: '#111620', borderColor: '#2a3548', borderWidth: 1, titleFont: {{ family: 'JetBrains Mono', size: 10 }}, bodyFont: {{ family: 'JetBrains Mono', size: 10 }}, callbacks: {{ label: i => ` ${{i.parsed.y.toFixed(1)}}% identity (inner region)` }} }} }}
+      plugins: {{
+        legend: {{ display: false }},
+        tooltip: {{ ...CHART_TOOLTIP,
+          callbacks: {{
+            title: i => {{
+              const pos = Math.round(i[0].parsed.x);
+              const gene = geneAtPos(pos);
+              return gene ? `Position ${{pos}} · ${{gene}}` : `Position ${{pos}}`;
+            }},
+            label: i => ` ${{i.parsed.y.toFixed(1)}}% variable`
+          }}
+        }}
+      }}
     }}
   }});
 }}
 
-// ── PER-POSITION VARIABILITY CHART (rebuilt on switch) ───────────────────────
-let varChartObj = null;
-function rebuildVarChart() {{
-  if (varChartObj) {{ varChartObj.destroy(); varChartObj = null; }}
-  if (!currentPairMatches()) {{
-    document.getElementById('varChart').getContext('2d').clearRect(0,0,9999,9999);
+// ── AMPLICON LENGTH DISTRIBUTION (rebuilt on primer switch) ──────────────────
+let ampLenChartObj = null;
+function buildAmpLenChart() {{
+  if (ampLenChartObj) {{ ampLenChartObj.destroy(); ampLenChartObj = null; }}
+  const titleEl = document.getElementById('ampLenTitle');
+
+  const fwd = selectedFwdIdx !== null ? uniqueFwds[selectedFwdIdx] : null;
+  const rev = selectedRevIdx !== null ? uniqueRevs[selectedRevIdx] : null;
+
+  if (!fwd || !rev || !Object.keys(GAPPED).length) {{
+    titleEl.textContent = 'Amplicon Length Distribution';
     return;
   }}
-  const ps = PS();
-  const refAmp = ps.amplicons[SEQ_NAMES[0]];
-  if (!refAmp) {{
-    document.getElementById('varChart').getContext('2d').clearRect(0,0,9999,9999);
-    return;
-  }}
-  const ref = refAmp.toUpperCase();
-  const fwdLen = ps.fwd_len, revLen = ps.rev_len, ampLen = ref.length;
-  const others = SEQ_NAMES.slice(1).map(n => ps.amplicons[n] ? ps.amplicons[n].toUpperCase() : null).filter(Boolean);
-  const varScore = [];
-  for (let i = 0; i < ampLen; i++) {{
-    const diffs = others.filter(s => s[i] && s[i] !== ref[i]).length;
-    varScore.push(others.length > 0 ? diffs / others.length * 100 : 0);
-  }}
-  const positions = Array.from({{length: ampLen}}, (_, i) => i);
-  const ctx = document.getElementById('varChart').getContext('2d');
-  varChartObj = new Chart(ctx, {{
+
+  const start = fwd.start;
+  const end = rev.end;
+  if (end <= start) return;
+
+  // For each sequence, count ungapped bases in the amplicon region
+  const lengths = [];
+  const labels = [];
+  const colors = [];
+  SEQ_NAMES.forEach(name => {{
+    const fullSeq = GAPPED[name];
+    if (!fullSeq) return;
+    const slice = fullSeq.substring(start, end);
+    const ungapped = slice.replace(/[-.]/g, '').length;
+    if (ungapped > 0) {{
+      lengths.push(ungapped);
+      labels.push(SHORT[name]);
+      colors.push(COLORS[name] + 'cc');
+    }}
+  }});
+
+  if (lengths.length === 0) return;
+
+  const minL = Math.min(...lengths);
+  const maxL = Math.max(...lengths);
+  titleEl.textContent = `Amplicon Length · ${{minL}}–${{maxL}} bp (${{lengths.length}} seqs)`;
+
+  // Build histogram bins
+  const binSize = Math.max(1, Math.ceil((maxL - minL + 1) / 15));
+  const bins = {{}};
+  lengths.forEach(l => {{
+    const bin = Math.floor((l - minL) / binSize) * binSize + minL;
+    bins[bin] = (bins[bin] || 0) + 1;
+  }});
+  const binKeys = Object.keys(bins).map(Number).sort((a,b) => a - b);
+
+  const ctx = document.getElementById('ampLenChart').getContext('2d');
+  ampLenChartObj = new Chart(ctx, {{
     type: 'bar',
     data: {{
-      labels: positions,
+      labels: binKeys.map(k => binSize === 1 ? `${{k}}` : `${{k}}–${{k+binSize-1}}`),
       datasets: [{{
-        data: varScore,
-        backgroundColor: positions.map((_, i) => {{
-          if (i < fwdLen) return 'rgba(245,158,11,0.7)';
-          if (i >= ampLen - revLen) return 'rgba(236,72,153,0.7)';
-          return varScore[i] > 0 ? 'rgba(56,217,217,0.8)' : 'rgba(56,217,217,0.15)';
-        }}),
-        borderWidth: 0, barPercentage: 1.0, categoryPercentage: 1.0
+        data: binKeys.map(k => bins[k]),
+        backgroundColor: THEME.accent + 'b3',
+        borderWidth: 0,
+        borderRadius: 3,
+        barPercentage: 1.0,
+        categoryPercentage: 0.9
       }}]
     }},
     options: {{
       responsive: true, maintainAspectRatio: false,
       scales: {{
-        y: {{ min: 0, max: 100, title: {{ display: true, text: '% seqs differ', color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, grid: {{ color: '#1a2030' }} }},
-        x: {{ ticks: {{ display: false }}, grid: {{ display: false }} }}
+        x: {{ title: {{ display: true, text: 'Amplicon length (bp)', ...CHART_TICK }}, ticks: CHART_TICK_SM, grid: {{ display: false }} }},
+        y: {{ title: {{ display: true, text: 'Sequences', ...CHART_TICK }}, ticks: {{ ...CHART_TICK, stepSize: 1 }}, grid: CHART_GRID }}
       }},
       plugins: {{
         legend: {{ display: false }},
-        tooltip: {{ backgroundColor: '#111620', borderColor: '#2a3548', borderWidth: 1, titleFont: {{ family: 'JetBrains Mono', size: 10 }}, bodyFont: {{ family: 'JetBrains Mono', size: 10 }},
+        tooltip: {{ ...CHART_TOOLTIP,
           callbacks: {{
-            title: i => {{ const pos = i[0].dataIndex; const region = pos < fwdLen ? 'FWD primer' : pos >= ampLen - revLen ? 'REV primer' : 'Variable region'; return `Pos ${{pos}} [${{region}}]`; }},
-            label: i => ` ${{i.parsed.y.toFixed(0)}}% of seqs differ vs REF`
+            label: i => ` ${{i.parsed.y}} sequence${{i.parsed.y !== 1 ? 's' : ''}}`
           }}
         }}
       }}
     }}
   }});
-}}
-
-// ── SLIDING WINDOW CHART (built once) ────────────────────────────────────────
-let slidingChart = null;
-function buildSlidingChart() {{
-  const ctx = document.getElementById('slidingChart').getContext('2d');
-  const datasets = Object.entries(SLIDING).map(([name, vals]) => ({{
-    label: SHORT[name],
-    data: X_POS.map((x,i) => vals[i] !== null ? {{x,y:vals[i]}} : null).filter(Boolean),
-    borderColor: COLORS[name], backgroundColor: COLORS[name]+'18',
-    borderWidth: 1.5, pointRadius: 0, tension: 0.4, spanGaps: false
-  }}));
-  slidingChart = new Chart(ctx, {{
-    type: 'line', data: {{ datasets }},
-    options: {{
-      responsive: true, maintainAspectRatio: false,
-      interaction: {{ mode: 'index', intersect: false }},
-      scales: {{
-        x: {{ type: 'linear', min: 0, max: ALIGN_LEN, title: {{ display: true, text: 'Alignment Position (bp)', color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, grid: {{ color: '#1a2030' }}, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }}, maxTicksLimit: 12 }} }},
-        y: {{ min: 75, max: 100, title: {{ display: true, text: 'Identity (%)', color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }}, grid: {{ color: '#1a2030' }}, ticks: {{ color: '#6b7d99', font: {{ family: 'JetBrains Mono', size: 9 }} }} }}
-      }},
-      plugins: {{
-        legend: {{ display: false }},
-        tooltip: {{ backgroundColor: '#111620', borderColor: '#2a3548', borderWidth: 1, titleFont: {{ family: 'JetBrains Mono', size: 10 }}, bodyFont: {{ family: 'JetBrains Mono', size: 9 }},
-          callbacks: {{
-            title: i => {{ const pos = i[0].parsed.x; const gc = PS().gapped; const inAmp = gc && gc.amp_start && pos >= gc.amp_start && pos <= gc.amp_end; return `Pos: ${{pos}} bp${{inAmp ? ' ← amplicon region' : ''}}`; }},
-            label: i => ` ${{i.dataset.label}}: ${{i.parsed.y.toFixed(1)}}%`
-          }}
-        }}
-      }}
-    }}
-  }});
-  const leg = document.getElementById('speciesLegend');
-  Object.keys(SLIDING).forEach(name => {{
-    const d = document.createElement('div');
-    d.className = 'sp-leg-item';
-    d.innerHTML = `<div class="sp-dot" style="background:${{COLORS[name]}}"></div>${{SHORT[name]}}`;
-    d.addEventListener('click', () => {{
-      const ds = slidingChart.data.datasets.find(x => x.label === SHORT[name]);
-      if (ds) {{ ds.hidden = !ds.hidden; d.classList.toggle('inactive', ds.hidden); slidingChart.update(); }}
-    }});
-    leg.appendChild(d);
-  }});
-}}
-
-// ── IDENTITY BARS (built once) ───────────────────────────────────────────────
-function buildIdBars() {{
-  const c = document.getElementById('idBars');
-  SEQ_NAMES.forEach(n => {{
-    const v = ID_VS_REF[n];
-    const pct = (v - 83) / 17 * 100;
-    const row = document.createElement('div');
-    row.className = 'id-bar-row';
-    row.innerHTML = `<div class="id-bar-label" style="color:${{COLORS[n]}}">${{SHORT[n]}}</div>
-      <div class="id-bar-track"><div class="id-bar-fill" style="width:${{pct}}%;background:${{COLORS[n]}};"></div></div>
-      <div class="id-bar-val" style="color:${{COLORS[n]}}">${{v.toFixed(2)}}%</div>`;
-    c.appendChild(row);
-  }});
-}}
-
-// ── HEATMAP (built once) ─────────────────────────────────────────────────────
-function idToColor(v) {{
-  const stops = [[83,[31,41,55]],[87,[37,99,148]],[91,[56,189,210]],[96,[250,173,60]],[100,[240,167,50]]];
-  let i = 0;
-  while (i < stops.length-2 && v > stops[i+1][0]) i++;
-  const [v0,c0] = stops[i], [v1,c1] = stops[i+1];
-  const t = Math.max(0,Math.min(1,(v-v0)/(v1-v0)));
-  const r=Math.round(c0[0]+t*(c1[0]-c0[0])), g=Math.round(c0[1]+t*(c1[1]-c0[1])), b=Math.round(c0[2]+t*(c1[2]-c0[2]));
-  const lum=(0.299*r+0.587*g+0.114*b)/255;
-  return {{bg:`rgb(${{r}},${{g}},${{b}})`,txt:lum>0.5?'#111':'#eee'}};
-}}
-function buildHeatmap() {{
-  const t = document.getElementById('heatmapTable');
-  const ax = SEQ_NAMES.map(n => {{
-    const s = SHORT[n];
-    if (s.includes('REF')) return 'REF';
-    return s.split(' ')[0].charAt(0)+'.'+s.split(' ')[1].substring(0,4);
-  }});
-  let h = '<tr><th></th>' + ax.map(l => `<th title="${{l}}">${{l.substring(0,6)}}</th>`).join('') + '</tr>';
-  MATRIX.forEach((row,i) => {{
-    h += `<tr><th class="row-head" style="color:${{COLORS[SEQ_NAMES[i]]}}">${{ax[i]}}</th>`;
-    row.forEach(v => {{ const c=idToColor(v); h += `<td style="background:${{c.bg}};color:${{c.txt}}" title="${{v}}%">${{v.toFixed(0)}}</td>`; }});
-    h += '</tr>';
-  }});
-  t.innerHTML = h;
 }}
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-buildGeneTrack();
+buildVariabilityChart();
 buildPrimerIndex();
 buildPrimerTrack();
 buildSelectedDetail();
 buildHitTable();
 buildEcoPCR();
 buildAlignment();
-rebuildInnerIdChart();
-rebuildVarChart();
-buildSlidingChart();
-buildIdBars();
-buildHeatmap();
+buildAmpLenChart();
 </script>
 </body>
 </html>'''

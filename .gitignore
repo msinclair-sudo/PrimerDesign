@@ -5,6 +5,8 @@ __pycache__/
 
 # Pipeline outputs (regenerated)
 data/output/
+data/example/output/analysis/
+data/example/output/primers/
 
 # OS
 .DS_Store

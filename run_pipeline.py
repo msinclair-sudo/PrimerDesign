@@ -88,7 +88,7 @@ def main():
         (output_dir / sub).mkdir(parents=True, exist_ok=True)
 
     primers_csv = output_dir / "primers" / "primers.csv"
-    primers_filtered = output_dir / "primers" / "primers_filtered.csv"
+    primers_validated = output_dir / "primers" / "primers_validated.csv"
     primers_expanded = output_dir / "primers" / "primers_expanded.csv"
     analysis_json = output_dir / "analysis" / "results.json"
     ranked_csv = output_dir / "analysis" / "primers_ranked.csv"
@@ -115,13 +115,13 @@ def main():
 
         "validate": lambda: run(
             [sys.executable, str(APP_DIR / "validate_thermodynamics.py"),
-             str(primers_csv), "-o", str(primers_filtered), "--config", args.config],
-            "Step 2: Thermodynamic validation",
+             str(primers_csv), "-o", str(primers_validated), "--config", args.config],
+            "Step 2: Individual primer validation",
             env=run_env),
 
         "expand": lambda: run(
             [sys.executable, str(APP_DIR / "expand_combinations.py"),
-             str(primers_filtered), "-i", args.input,
+             str(primers_validated), "-i", args.input,
              "-o", str(primers_expanded), "--config", args.config],
             "Step 2b: Expand viable FWD+REV combinations",
             env=run_env),

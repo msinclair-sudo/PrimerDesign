@@ -790,22 +790,15 @@ def _ecopcr_worker(args):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def load_config(config_path: str | None) -> dict:
-    """Load analysis config from YAML, with defaults."""
+    """Load analysis config from YAML. Exits if config is missing."""
     import yaml
-    defaults = {
-        "on_target_mm": 2,
-        "off_target_mm": 3,
-        "amp_min": 10,
-        "amp_max": 500,
-        "eco_min": 50,
-        "eco_max": 500,
-        "eco_circular": True,
-    }
     if config_path is None:
-        return defaults
+        print("ERROR: --config is required. No config file specified.", file=sys.stderr)
+        sys.exit(1)
     p = Path(config_path)
     if not p.exists():
-        return defaults
+        print(f"ERROR: Config not found at {p}", file=sys.stderr)
+        sys.exit(1)
     with open(p) as f:
         raw = yaml.safe_load(f)
     mm = raw.get("mismatches", {})
@@ -813,13 +806,13 @@ def load_config(config_path: str | None) -> dict:
     design = raw.get("design", {})
     thermo = raw.get("thermodynamics", {})
     return {
-        "on_target_mm": mm.get("on_target", defaults["on_target_mm"]),
-        "off_target_mm": mm.get("off_target", defaults["off_target_mm"]),
-        "amp_min": design.get("min_amplicon_length", defaults["amp_min"]),
-        "amp_max": design.get("max_amplicon_length", defaults["amp_max"]),
-        "eco_min": eco.get("min_amplicon_length", defaults["eco_min"]),
-        "eco_max": eco.get("max_amplicon_length", defaults["eco_max"]),
-        "eco_circular": eco.get("circular", defaults["eco_circular"]),
+        "on_target_mm": mm.get("on_target", 2),
+        "off_target_mm": mm.get("off_target", 3),
+        "amp_min": design.get("min_amplicon_length", 90),
+        "amp_max": design.get("max_amplicon_length", 300),
+        "eco_min": eco.get("min_amplicon_length", 10),
+        "eco_max": eco.get("max_amplicon_length", 500),
+        "eco_circular": eco.get("circular", True),
         "thermo": thermo,
     }
 
@@ -997,6 +990,7 @@ def main(fasta_path: str, primers_csv: str | None = None,
             "ecopcr_database": database if has_db else None,
         },
         "seq_names": seq_names,
+        "gapped_sequences": {name: seqs_gapped[name] for name in seq_names},
         "genes": genes,
         "matrix": matrix,
         "id_vs_ref": id_vs_ref,

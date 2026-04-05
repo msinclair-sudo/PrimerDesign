@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Step 2: Thermodynamic validation of primer pairs.
+"""Step 2: Thermodynamic validation of individual primers.
 
-Calculates Tm, hairpin/homodimer/heterodimer ΔG, GC%, GC clamp,
-and homopolymer runs. Applies hard-reject and soft-flag logic.
+Extracts unique forward and reverse primer sequences from a pairs CSV,
+calculates Tm, hairpin/homodimer ΔG, GC%, GC clamp, and homopolymer runs
+for each unique primer, then applies hard-reject and soft-flag logic.
+
+Pair-level checks (delta Tm, heterodimer) are deferred to the expansion
+step where all viable FWD+REV combinations are generated.
 
 Requires primer3-py (preferred) or ntthal CLI as fallback.
 """
 
 import argparse
 import csv
-import json
 import multiprocessing
 import os
-import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -24,46 +26,40 @@ except ImportError:
     yaml = None
 
 # ---------------------------------------------------------------------------
-# Defaults (match primer_config.yaml / spec)
-# ---------------------------------------------------------------------------
-DEFAULTS = {
-    "tm_range": [58, 64],
-    "max_delta_tm": 5,
-    "gc_range": [40, 60],
-    "max_hairpin_dg": -3.0,
-    "max_homodimer_dg": -9.0,
-    "max_heterodimer_dg": -9.0,
-    "max_homopolymer": 4,
-    "gc_clamp_3prime": [1, 3],
-}
+# Required config keys (thermodynamics section)
+REQUIRED_KEYS = ["tm_range", "gc_range", "max_hairpin_dg", "max_homodimer_dg",
+                 "max_homopolymer", "gc_clamp_3prime"]
 
-# Hard-reject thresholds: if ANY of these fail, the pair is rejected.
-# Everything else is a soft flag.
-HARD_REJECT = {"tm_range", "max_delta_tm", "max_hairpin_dg"}
+# Hard-reject thresholds: if ANY of these fail, the primer is rejected.
+HARD_REJECT = {"tm_out_of_range", "hairpin"}
 
 
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
 def load_config(path):
-    """Load thermodynamic thresholds from YAML config, falling back to DEFAULTS."""
-    cfg = dict(DEFAULTS)
+    """Load thermodynamic thresholds from YAML config. Exits if config is missing."""
     if path is None:
-        return cfg
+        print("ERROR: --config is required. No config file specified.", file=sys.stderr)
+        sys.exit(1)
     p = Path(path)
     if not p.exists():
-        print(f"[warn] Config not found at {p}, using defaults", file=sys.stderr)
-        return cfg
+        print(f"ERROR: Config not found at {p}", file=sys.stderr)
+        sys.exit(1)
     if yaml is None:
-        print("[warn] PyYAML not installed, using defaults", file=sys.stderr)
-        return cfg
+        print("ERROR: PyYAML is required but not installed.", file=sys.stderr)
+        sys.exit(1)
     with open(p) as f:
         raw = yaml.safe_load(f)
-    thermo = raw.get("thermodynamics", {})
-    for key in DEFAULTS:
-        if key in thermo:
-            cfg[key] = thermo[key]
-    return cfg
+    thermo = raw.get("thermodynamics")
+    if not thermo:
+        print(f"ERROR: Config {p} has no 'thermodynamics' section.", file=sys.stderr)
+        sys.exit(1)
+    missing = [k for k in REQUIRED_KEYS if k not in thermo]
+    if missing:
+        print(f"ERROR: Config missing required keys: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
+    return {k: thermo[k] for k in REQUIRED_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -246,45 +242,28 @@ def max_homopolymer(seq):
 
 
 # ---------------------------------------------------------------------------
-# Validation
+# Individual primer validation
 # ---------------------------------------------------------------------------
-def validate_pair(name, fwd, rev, cfg):
-    """Validate a single primer pair. Returns dict of metrics + flags."""
-    fwd, rev = fwd.strip().upper(), rev.strip().upper()
+def validate_primer(seq, cfg):
+    """Validate a single primer sequence. Returns dict of metrics + flags."""
+    seq = seq.strip().upper()
 
-    tm_fwd = calc_tm(fwd)
-    tm_rev = calc_tm(rev)
-    delta_tm = abs(tm_fwd - tm_rev)
-    hairpin_fwd = calc_hairpin(fwd)
-    hairpin_rev = calc_hairpin(rev)
-    homodimer_fwd = calc_homodimer(fwd)
-    homodimer_rev = calc_homodimer(rev)
-    heterodimer = calc_heterodimer(fwd, rev)
-    gc_fwd = gc_content(fwd)
-    gc_rev = gc_content(rev)
-    gc_clamp_fwd = gc_clamp_count(fwd)
-    gc_clamp_rev = gc_clamp_count(rev)
-    homopoly_fwd = max_homopolymer(fwd)
-    homopoly_rev = max_homopolymer(rev)
+    tm = calc_tm(seq)
+    hairpin = calc_hairpin(seq)
+    homodimer = calc_homodimer(seq)
+    gc = gc_content(seq)
+    clamp = gc_clamp_count(seq)
+    homopoly = max_homopolymer(seq)
 
     row = {
-        "name": name,
-        "forward": fwd,
-        "reverse": rev,
-        "tm_fwd": round(tm_fwd, 1),
-        "tm_rev": round(tm_rev, 1),
-        "delta_tm": round(delta_tm, 1),
-        "hairpin_dg_fwd": round(hairpin_fwd, 2),
-        "hairpin_dg_rev": round(hairpin_rev, 2),
-        "homodimer_dg_fwd": round(homodimer_fwd, 2),
-        "homodimer_dg_rev": round(homodimer_rev, 2),
-        "heterodimer_dg": round(heterodimer, 2),
-        "gc_fwd": round(gc_fwd, 1),
-        "gc_rev": round(gc_rev, 1),
-        "gc_clamp_fwd": gc_clamp_fwd,
-        "gc_clamp_rev": gc_clamp_rev,
-        "homopolymer_fwd": homopoly_fwd,
-        "homopolymer_rev": homopoly_rev,
+        "sequence": seq,
+        "length": len(seq),
+        "tm": round(tm, 1),
+        "hairpin_dg": round(hairpin, 2),
+        "homodimer_dg": round(homodimer, 2),
+        "gc_pct": round(gc, 1),
+        "gc_clamp": clamp,
+        "homopolymer": homopoly,
     }
 
     # --- Flag logic ---
@@ -293,45 +272,21 @@ def validate_pair(name, fwd, rev, cfg):
     gc_lo, gc_hi = cfg["gc_range"]
     clamp_lo, clamp_hi = cfg["gc_clamp_3prime"]
 
-    if not (tm_lo <= tm_fwd <= tm_hi):
-        flags.append("tm_fwd_out_of_range")
-    if not (tm_lo <= tm_rev <= tm_hi):
-        flags.append("tm_rev_out_of_range")
-    if delta_tm > cfg["max_delta_tm"]:
-        flags.append("delta_tm_too_high")
-    if hairpin_fwd < cfg["max_hairpin_dg"]:
-        flags.append("hairpin_fwd")
-    if hairpin_rev < cfg["max_hairpin_dg"]:
-        flags.append("hairpin_rev")
-    if homodimer_fwd < cfg["max_homodimer_dg"]:
-        flags.append("homodimer_fwd")
-    if homodimer_rev < cfg["max_homodimer_dg"]:
-        flags.append("homodimer_rev")
-    if heterodimer < cfg["max_heterodimer_dg"]:
-        flags.append("heterodimer")
-    if not (gc_lo <= gc_fwd <= gc_hi):
-        flags.append("gc_fwd_out_of_range")
-    if not (gc_lo <= gc_rev <= gc_hi):
-        flags.append("gc_rev_out_of_range")
-    if not (clamp_lo <= gc_clamp_fwd <= clamp_hi):
-        flags.append("gc_clamp_fwd")
-    if not (clamp_lo <= gc_clamp_rev <= clamp_hi):
-        flags.append("gc_clamp_rev")
-    if homopoly_fwd > cfg["max_homopolymer"]:
-        flags.append("homopolymer_fwd")
-    if homopoly_rev > cfg["max_homopolymer"]:
-        flags.append("homopolymer_rev")
+    if not (tm_lo <= tm <= tm_hi):
+        flags.append("tm_out_of_range")
+    if hairpin < cfg["max_hairpin_dg"]:
+        flags.append("hairpin")
+    if homodimer < cfg["max_homodimer_dg"]:
+        flags.append("homodimer")
+    if not (gc_lo <= gc <= gc_hi):
+        flags.append("gc_out_of_range")
+    if not (clamp_lo <= clamp <= clamp_hi):
+        flags.append("gc_clamp")
+    if homopoly > cfg["max_homopolymer"]:
+        flags.append("homopolymer")
 
-    # Determine hard reject vs soft flag
-    hard_flags = {f for f in flags if any(f.startswith(h.replace("max_", "").replace("_range", ""))
-                                        for h in HARD_REJECT)}
-    # More precise: check each flag against hard-reject categories
-    hard = set()
-    for f in flags:
-        if f.startswith("tm_") or f == "delta_tm_too_high":
-            hard.add(f)
-        if f.startswith("hairpin_"):
-            hard.add(f)
+    # Hard reject vs soft flag
+    hard = HARD_REJECT & set(flags)
 
     row["flags"] = ";".join(flags) if flags else ""
     row["status"] = "REJECT" if hard else ("FLAG" if flags else "PASS")
@@ -343,14 +298,9 @@ def validate_pair(name, fwd, rev, cfg):
 # I/O
 # ---------------------------------------------------------------------------
 OUTPUT_COLUMNS = [
-    "name", "forward", "reverse",
-    "tm_fwd", "tm_rev", "delta_tm",
-    "hairpin_dg_fwd", "hairpin_dg_rev",
-    "homodimer_dg_fwd", "homodimer_dg_rev",
-    "heterodimer_dg",
-    "gc_fwd", "gc_rev",
-    "gc_clamp_fwd", "gc_clamp_rev",
-    "homopolymer_fwd", "homopolymer_rev",
+    "sequence", "direction", "length",
+    "tm", "hairpin_dg", "homodimer_dg",
+    "gc_pct", "gc_clamp", "homopolymer",
     "flags", "status",
 ]
 
@@ -360,25 +310,45 @@ def run(input_csv, output_csv, config_path, keep_rejected):
     _init_backend()
     print(f"[info] Backend: {_BACKEND}", file=sys.stderr)
 
+    # Extract unique FWD and REV sequences from pairs CSV
+    unique_fwd = {}  # seq -> True
+    unique_rev = {}
     with open(input_csv, newline="") as f:
         reader = csv.DictReader(f)
         if not {"name", "forward", "reverse"}.issubset(reader.fieldnames):
             print("ERROR: Input CSV must have columns: name, forward, reverse",
                   file=sys.stderr)
             sys.exit(1)
-        pairs = list(reader)
+        for row in reader:
+            fwd = row["forward"].strip().upper()
+            rev = row["reverse"].strip().upper()
+            unique_fwd[fwd] = True
+            unique_rev[rev] = True
+
+    all_primers = (
+        [(seq, "FWD") for seq in unique_fwd]
+        + [(seq, "REV") for seq in unique_rev]
+    )
+    print(
+        f"[info] {len(unique_fwd)} unique FWD + {len(unique_rev)} unique REV "
+        f"= {len(all_primers)} individual primers to validate",
+        file=sys.stderr,
+    )
 
     workers = int(os.environ.get("PRIMER_WORKERS", max(1, multiprocessing.cpu_count() - 1)))
     print(f"[info] Using {workers} workers", file=sys.stderr)
 
-    def _validate_one(pair):
-        return validate_pair(pair["name"], pair["forward"], pair["reverse"], cfg)
+    def _validate_one(item):
+        seq, direction = item
+        result = validate_primer(seq, cfg)
+        result["direction"] = direction
+        return result
 
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            results_all = list(pool.map(_validate_one, pairs))
+            results_all = list(pool.map(_validate_one, all_primers))
     else:
-        results_all = [validate_pair(p["name"], p["forward"], p["reverse"], cfg) for p in pairs]
+        results_all = [_validate_one(item) for item in all_primers]
 
     results = []
     n_pass, n_flag, n_reject = 0, 0, 0
@@ -398,11 +368,11 @@ def run(input_csv, output_csv, config_path, keep_rejected):
         writer.writerows(results)
 
     print(
-        f"[info] {len(pairs)} pairs evaluated: "
+        f"[info] {len(all_primers)} primers evaluated: "
         f"{n_pass} PASS, {n_flag} FLAG, {n_reject} REJECT",
         file=sys.stderr,
     )
-    print(f"[info] Wrote {len(results)} pairs to {output_csv}", file=sys.stderr)
+    print(f"[info] Wrote {len(results)} primers to {output_csv}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -410,18 +380,18 @@ def run(input_csv, output_csv, config_path, keep_rejected):
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Thermodynamic validation of primer pairs (Step 2)."
+        description="Thermodynamic validation of individual primers (Step 2)."
     )
     parser.add_argument(
         "input", help="Input CSV with columns: name, forward, reverse"
     )
     parser.add_argument(
         "-o", "--output", default=None,
-        help="Output CSV (default: primers_filtered.csv in same dir as input)"
+        help="Output CSV (default: primers_validated.csv in same dir as input)"
     )
     parser.add_argument(
-        "--config", default=None,
-        help="Path to primer_config.yaml (default: primer_config.yaml)"
+        "--config", required=True,
+        help="Path to config YAML (required)"
     )
     parser.add_argument(
         "--keep-rejected", action="store_true",
@@ -431,17 +401,7 @@ def main():
 
     if args.output is None:
         inp = Path(args.input)
-        args.output = str(inp.parent / "primers_filtered.csv")
-
-    # Auto-discover config if not specified
-    if args.config is None:
-        candidates = [
-            Path("primer_config.yaml"),
-        ]
-        for c in candidates:
-            if c.exists():
-                args.config = str(c)
-                break
+        args.output = str(inp.parent / "primers_validated.csv")
 
     run(args.input, args.output, args.config, args.keep_rejected)
 
