@@ -17,9 +17,11 @@ design:
 decipher:
   min_coverage: 0.8 # Minimum fraction of sequences a primer must bind (0-1)
   resolution: 5 # k-mer size for differentiating amplicon sequences
-  max_degeneracy: 128 # Maximum degeneracy (fold) allowed per primer
-  num_primer_sets: 1000 # Number of primer pairs returned; increase to explore more regions
-  search_primers: 2000 # Candidate primers in initial search; increase for broader coverage
+  max_permutations: 1 # Maximum permutations (degeneracy) per primer; 1 = no degenerate bases
+  num_primer_sets: 200 # Number of primer pairs returned per window
+  search_primers: 500 # Candidate primers in initial search per window
+  window_size: 1000 # Sliding window size (bp) for exploring multiple regions
+  window_overlap: 200 # Overlap between adjacent windows (bp)
 
 # ── Thermodynamic filtering ───────────────────────────────────────────────────
 # Applied in Step 2 (validate) and Step 2b (expand). REJECT = removed, FLAG = kept with warning.

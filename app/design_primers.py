@@ -114,6 +114,7 @@ sigs <- DesignSignatures(
   maxProductSize = config$max_amplicon_length,
   resolution     = config$resolution,
   levels         = 5,
+  maxPermutations = config$max_degeneracy,
   numPrimerSets  = config$num_primer_sets,
   searchPrimers  = config$search_primers,
   processors     = n_cores
@@ -143,29 +144,8 @@ cat("Wrote", nrow(out), "primers to", output_csv, "\n")
 """
 
 
-def design_with_decipher(fasta_path: str, config: dict) -> list[dict]:
-    """Run DECIPHER DesignSignatures via R subprocess."""
-    design_cfg = config.get("design", {})
-    decipher_cfg = config.get("decipher", {})
-
-    # Determine core count: env var PRIMER_WORKERS > fallback to (cpu_count - 1)
-    available_cores = os.cpu_count() or 1
-    fallback_cores = max(1, available_cores - 1)
-    env_workers = os.environ.get("PRIMER_WORKERS")
-    if env_workers is not None:
-        n_cores = min(int(env_workers), available_cores)
-    else:
-        n_cores = fallback_cores
-
-    r_config = {
-        "min_amplicon_length": design_cfg.get("min_amplicon_length", 90),
-        "max_amplicon_length": design_cfg.get("max_amplicon_length", 180),
-        "resolution": decipher_cfg.get("resolution", 5),
-        "num_primer_sets": decipher_cfg.get("num_primer_sets", 1000),
-        "search_primers": decipher_cfg.get("search_primers", 2000),
-        "n_cores": n_cores,
-    }
-
+def _run_decipher_on_fasta(fasta_path: str, r_config: dict) -> list[dict]:
+    """Run DECIPHER DesignSignatures on a single FASTA file."""
     with tempfile.TemporaryDirectory() as tmpdir:
         r_script = os.path.join(tmpdir, "design.R")
         config_json = os.path.join(tmpdir, "config.json")
@@ -182,11 +162,12 @@ def design_with_decipher(fasta_path: str, config: dict) -> list[dict]:
         )
 
         if result.returncode != 0:
-            print(f"DECIPHER stderr:\n{result.stderr}", file=sys.stderr)
-            raise RuntimeError(f"DECIPHER R script failed (exit {result.returncode})")
+            print(f"  DECIPHER stderr:\n{result.stderr}", file=sys.stderr)
+            return []
 
         if result.stdout:
-            print(result.stdout, end="")
+            for line in result.stdout.strip().splitlines():
+                print(f"    {line}")
 
         primers = []
         if os.path.exists(output_csv):
@@ -199,6 +180,96 @@ def design_with_decipher(fasta_path: str, config: dict) -> list[dict]:
                         "reverse": row["reverse"],
                     })
     return primers
+
+
+def _slice_msa_window(sequences: list[tuple[str, str]], start: int, end: int,
+                      tmp_path: str) -> str:
+    """Extract a window from the MSA and write to a temp FASTA.
+    Removes all-gap columns within the window."""
+    aln_len = len(sequences[0][1])
+    end = min(end, aln_len)
+
+    # Find columns that have at least one base
+    keep_cols = [c for c in range(start, end)
+                 if any(seq[c] not in "-. " for _, seq in sequences)]
+
+    fasta_path = os.path.join(tmp_path, f"window_{start}_{end}.fasta")
+    with open(fasta_path, "w") as f:
+        for name, seq in sequences:
+            sliced = "".join(seq[c] for c in keep_cols)
+            f.write(f">{name}\n{sliced}\n")
+
+    return fasta_path
+
+
+def design_with_decipher(fasta_path: str, config: dict) -> list[dict]:
+    """Run DECIPHER DesignSignatures via sliding windows across the MSA."""
+    design_cfg = config.get("design", {})
+    decipher_cfg = config.get("decipher", {})
+
+    # Determine core count
+    available_cores = os.cpu_count() or 1
+    fallback_cores = max(1, available_cores - 1)
+    env_workers = os.environ.get("PRIMER_WORKERS")
+    n_cores = min(int(env_workers), available_cores) if env_workers else fallback_cores
+
+    r_config = {
+        "min_amplicon_length": design_cfg.get("min_amplicon_length", 90),
+        "max_amplicon_length": design_cfg.get("max_amplicon_length", 180),
+        "resolution": decipher_cfg.get("resolution", 5),
+        "max_degeneracy": decipher_cfg.get("max_permutations", 4),
+        "num_primer_sets": decipher_cfg.get("num_primer_sets", 1000),
+        "search_primers": decipher_cfg.get("search_primers", 2000),
+        "n_cores": n_cores,
+    }
+
+    window_size = decipher_cfg.get("window_size", 1000)
+    window_overlap = decipher_cfg.get("window_overlap", 200)
+
+    sequences = read_msa_fasta(fasta_path)
+    aln_len = len(sequences[0][1])
+
+    # Build window positions
+    step = window_size - window_overlap
+    windows = []
+    pos = 0
+    while pos < aln_len:
+        end = min(pos + window_size, aln_len)
+        windows.append((pos, end))
+        if end == aln_len:
+            break
+        pos += step
+
+    # If alignment is small enough for a single window, just run once
+    if len(windows) <= 1:
+        print(f"  Alignment ({aln_len} bp) fits in one window — running DECIPHER directly")
+        return _run_decipher_on_fasta(fasta_path, r_config)
+
+    print(f"  Alignment: {aln_len} bp → {len(windows)} windows "
+          f"({window_size} bp, {window_overlap} bp overlap)")
+
+    all_primers = []
+    seen_pairs = set()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, (ws, we) in enumerate(windows):
+            print(f"\n  Window {i + 1}/{len(windows)}: positions {ws}–{we}")
+            window_fasta = _slice_msa_window(sequences, ws, we, tmpdir)
+            primers = _run_decipher_on_fasta(window_fasta, r_config)
+
+            # Deduplicate by (forward, reverse) sequence pair
+            n_new = 0
+            for p in primers:
+                key = (p["forward"].upper(), p["reverse"].upper())
+                if key not in seen_pairs:
+                    seen_pairs.add(key)
+                    p["name"] = f"W{i + 1}_{p['name']}"
+                    all_primers.append(p)
+                    n_new += 1
+            print(f"    {len(primers)} primers, {n_new} new (deduplicated)")
+
+    print(f"\n  Total unique primers across all windows: {len(all_primers)}")
+    return all_primers
 
 
 # ---------------------------------------------------------------------------

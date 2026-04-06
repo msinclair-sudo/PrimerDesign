@@ -278,6 +278,15 @@ def _extract_and_map_features(gb_record, offset: int, genome_len: int,
         msa_start = (feat_start - offset) % genome_len
         msa_end = (feat_end - offset) % genome_len
 
+        # For trimmed alignments (MSA covers only part of the genome), reject
+        # features that map into range via modular wrap but aren't actually present.
+        # A feature is truly in-range if its linear distance from the offset
+        # (unwrapped) falls within the MSA ungapped length.
+        if msa_ungapped_len < genome_len * 0.95:
+            linear_dist = (feat_start - offset) % genome_len
+            if linear_dist >= msa_ungapped_len and (feat_end - offset) % genome_len >= msa_ungapped_len:
+                continue
+
         # Handle feature wrapping around in MSA space
         if msa_start > msa_end:
             # Feature crosses the boundary — check if either part is in our region

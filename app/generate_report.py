@@ -24,26 +24,46 @@ PALETTE = [
 
 
 def short_name(full: str) -> str:
-    """NC_008135_Petaurus_breviceps_REF → P. breviceps (REF)"""
+    """Shorten a FASTA header to a readable species label.
+
+    Handles formats:
+      NC_006914.1 Mus musculus domesticus mitochondrion, complete genome
+      NC_008135_Petaurus_breviceps_REF
+      OR840808.1
+    """
+    # Try NCBI-style: "ACCESSION Species name ... mitochondrion"
+    if " " in full:
+        parts = full.split()
+        acc = parts[0]
+        # Find species binomial (first two capitalised/lowercase words after accession)
+        words = parts[1:]
+        # Strip trailing metadata (mitochondrion, complete genome, isolate, etc.)
+        species_words = []
+        for w in words:
+            if w.lower() in ("mitochondrion,", "mitochondrion", "isolate", "strain",
+                             "voucher", "breed", "complete", "partial", "genome",
+                             "genome,", "sequence"):
+                break
+            species_words.append(w)
+        if len(species_words) >= 2:
+            return f"{species_words[0][0]}. {species_words[1]} ({acc})"
+        elif species_words:
+            return f"{species_words[0]} ({acc})"
+        return acc
+
+    # Underscore-separated: NC_008135_Petaurus_breviceps_REF
     parts = full.split("_")
     if parts[-1] == "REF":
         tag = "REF"
-        species_parts = parts[1:-1] if len(parts) > 3 else parts[1:-1]
+        sp = parts[2:-1] if len(parts) > 3 and parts[1].isdigit() else parts[1:-1]
+    elif len(parts) >= 3 and parts[1].isdigit():
+        tag = f"{parts[0]}_{parts[1]}"
+        sp = parts[2:]
     else:
         tag = parts[0]
-        species_parts = parts[1:]
-    if len(parts) >= 3 and parts[1].isdigit():
-        tag = "REF" if parts[-1] == "REF" else f"{parts[0]}_{parts[1]}"
-        species_parts = parts[2:-1] if parts[-1] == "REF" else parts[2:]
-    elif len(parts) >= 2 and not parts[1].isdigit():
-        if parts[-1] == "REF":
-            tag = "REF"
-            species_parts = parts[1:-1]
-        else:
-            tag = parts[0]
-            species_parts = parts[1:]
-    if len(species_parts) >= 2:
-        return f"{species_parts[0][0]}. {species_parts[1]} ({tag})"
+        sp = parts[1:]
+    if len(sp) >= 2:
+        return f"{sp[0][0]}. {sp[1]} ({tag})"
     return full
 
 

@@ -9,19 +9,19 @@ A pipeline for designing and validating metabarcoding primers from a multiple se
 Design new primers from an alignment:
 
 ```bash
-python run_pipeline.py -i alignment.fasta -g reference.gb
+python Design.py -i alignment.fasta -g reference.gb
 ```
 
 With off-target screening against a sequence database:
 
 ```bash
-python run_pipeline.py -i alignment.fasta -g reference.gb -d path/to/fasta_files
+python Design.py -i alignment.fasta -g reference.gb -d path/to/fasta_files
 ```
 
 Evaluate existing primers instead of designing new ones:
 
 ```bash
-python run_pipeline.py -i alignment.fasta -g reference.gb -p my_primers.csv
+python Design.py -i alignment.fasta -g reference.gb -p my_primers.csv
 ```
 
 When `-p` is supplied, the design step is skipped and the supplied primers are used as the starting point. They pass through the same validation, analysis, and ranking as designed candidates. This makes the tool dual-purpose — it can design new primers or evaluate existing ones through the same analytical pipeline. The primers CSV must have columns `name`, `forward`, `reverse`.
@@ -29,13 +29,13 @@ When `-p` is supplied, the design step is skipped and the supplied primers are u
 Custom output directory:
 
 ```bash
-python run_pipeline.py -i alignment.fasta -g reference.gb -o results/my_run
+python Design.py -i alignment.fasta -g reference.gb -o results/my_run
 ```
 
 Run with the included example data (11-species rodent mitogenome panel):
 
 ```bash
-python run_pipeline.py -i data/example/input/rodent_aligned.fasta -g data/example/input/NC_006914.1.gb
+python Design.py -i data/example/input/rodent_aligned.fasta -g data/example/input/NC_006914.1.gb
 ```
 
 ### Arguments
@@ -52,14 +52,30 @@ python run_pipeline.py -i data/example/input/rodent_aligned.fasta -g data/exampl
 
 The database flag accepts a directory containing multiple FASTA files, or a single FASTA file. If `--genbank` is not specified, the pipeline looks for a `.gb` file in the same directory as the input alignment and uses it automatically.
 
+### Alignment Preparation
+
+Prepare a trimmed, correctly-oriented MSA from raw mitogenome sequences. Handles circular genome artifacts by rotating all sequences to center the target region, realigning with MAFFT, then trimming to the specified gene range:
+
+```bash
+python Design.py align -i raw_sequences.fasta -g reference.gb --from cytb --to 16S -o aligned_trimmed.fasta
+```
+
+| Flag              | Description                                          |
+| ----------------- | ---------------------------------------------------- |
+| `-i / --input`    | Input FASTA (unaligned or aligned sequences)         |
+| `-g / --genbank`  | GenBank file for the reference sequence (required)   |
+| `--from`          | Start gene name (e.g. cytb, 12S, Dloop)             |
+| `--to`            | End gene name (e.g. 16S, cytb)                       |
+| `-o / --output`   | Output FASTA (default: `aligned_trimmed.fasta`)      |
+
 ### Debug Mode
 
 Individual pipeline steps can be invoked separately using debug mode:
 
 ```bash
-python run_pipeline.py debug analyse -i alignment.fasta -d path/to/fasta_files
-python run_pipeline.py debug rank
-python run_pipeline.py debug report
+python Design.py debug analyse -i alignment.fasta -d path/to/fasta_files
+python Design.py debug rank
+python Design.py debug report
 ```
 
 Available steps: `design`, `validate`, `expand`, `analyse`, `rank`, `report`.
