@@ -23,51 +23,79 @@ PALETTE = [
 ]
 
 
+import re as _re
+
+# Regex for NCBI accessions: e.g. NC_014696.1, GU570660.1, OR840808.1
+_ACCESSION_RE = _re.compile(r'^[A-Z]{1,3}_?\d{5,}(?:\.\d+)?$')
+
+_METADATA_WORDS = {"mitochondrion,", "mitochondrion", "isolate", "strain",
+                   "voucher", "breed", "complete", "partial", "genome",
+                   "genome,", "sequence"}
+
+
+def _is_accession(token: str) -> bool:
+    """Check if a token looks like an NCBI accession number."""
+    return bool(_ACCESSION_RE.match(token))
+
+
 def short_name(full: str) -> str:
     """Shorten a FASTA header to a readable species label.
 
     Handles formats:
-      NC_006914.1 Mus musculus domesticus mitochondrion, complete genome
+      NC_014696.1 Leggadina lakedownensis mitochondrion, complete genome
+      GU570660.1 Rattus leucopus isolate RleuPN66 mitochondrion, complete genome
       NC_008135_Petaurus_breviceps_REF
+      Conilurus_penicillatus
       OR840808.1
     """
-    # Try NCBI-style: "ACCESSION Species name ... mitochondrion"
+    # Try space-separated NCBI-style: "ACCESSION Species name ... mitochondrion"
     if " " in full:
         parts = full.split()
         acc = parts[0]
-        # Find species binomial (first two capitalised/lowercase words after accession)
         words = parts[1:]
-        # Strip trailing metadata (mitochondrion, complete genome, isolate, etc.)
         species_words = []
         for w in words:
-            if w.lower() in ("mitochondrion,", "mitochondrion", "isolate", "strain",
-                             "voucher", "breed", "complete", "partial", "genome",
-                             "genome,", "sequence"):
+            if w.lower() in _METADATA_WORDS:
                 break
             species_words.append(w)
-        if len(species_words) >= 2:
-            return f"{species_words[0][0]}. {species_words[1]} ({acc})"
-        elif species_words:
-            return f"{species_words[0]} ({acc})"
+        if species_words:
+            return f"{' '.join(species_words)} ({acc})"
         return acc
 
-    # Underscore-separated: NC_008135_Petaurus_breviceps_REF
+    # Underscore-separated: try to identify accession prefix
     parts = full.split("_")
-    if parts[-1] == "REF":
-        tag = "REF"
-        sp = parts[2:-1] if len(parts) > 3 and parts[1].isdigit() else parts[1:-1]
-    elif len(parts) >= 3 and parts[1].isdigit():
-        tag = f"{parts[0]}_{parts[1]}"
-        sp = parts[2:]
-    else:
-        tag = parts[0]
-        sp = parts[1:]
-    if len(sp) >= 2:
-        return f"{sp[0][0]}. {sp[1]} ({tag})"
-    return full
+    is_ref = parts[-1] == "REF"
+    if is_ref:
+        parts = parts[:-1]
+
+    # Try to reconstruct an accession from leading parts
+    # e.g. ["NC", "014696.1", "Species", "name"] -> acc = "NC_014696.1"
+    acc = None
+    sp_parts = parts
+    for i in range(1, min(len(parts), 3)):
+        candidate = "_".join(parts[:i + 1])
+        if _is_accession(candidate):
+            acc = candidate
+            sp_parts = parts[i + 1:]
+            break
+    # Single-part accession: e.g. ["OR840808.1", ...]
+    if acc is None and _is_accession(parts[0]):
+        acc = parts[0]
+        sp_parts = parts[1:]
+
+    # No accession found — treat entire string as species name
+    if acc is None:
+        sp = " ".join(parts)
+        return sp
+
+    tag = f"{acc} · REF" if is_ref else acc
+    if sp_parts:
+        return f"{' '.join(sp_parts)} ({tag})"
+    return tag
 
 
-def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
+def build_js_data(data: dict, short_names: dict, colors: dict,
+                   max_amp_len: int = 300, min_amp_len: int = 90) -> str:
     """Build the JavaScript data constants block."""
     seq_names = data["seq_names"]
     meta = data["meta"]
@@ -167,22 +195,34 @@ def build_js_data(data: dict, short_names: dict, colors: dict) -> str:
         f"const X_POS = {json.dumps(data['sliding_window']['x_positions'])};",
         f"const SLIDING = {json.dumps(data['sliding_window']['data'])};",
         f"const PRIMER_SETS = {json.dumps(ps_js)};",
-        f"let activePSIndex = {next((i for i, ps in enumerate(ps_js) if any(v is not None for v in ps['amplicons'].values())), 0)};",
-        "function PS() { return PRIMER_SETS[activePSIndex]; }",
+        f"const MAX_AMP_LEN = {max_amp_len};",
+        f"const MIN_AMP_LEN = {min_amp_len};",
+        "let activePSIndex = -1;",
+        "function PS() { return activePSIndex >= 0 ? PRIMER_SETS[activePSIndex] : null; }",
     ]
     return "\n".join(lines)
 
 
-def generate_html(data: dict, header_cfg: dict | None = None) -> str:
+def generate_html(data: dict, header_cfg: dict | None = None,
+                   full_cfg: dict | None = None) -> str:
     """Generate the full HTML dashboard."""
     seq_names = data["seq_names"]
     meta = data["meta"]
     ref_name = meta["reference"]
 
+    # Extract amplicon length limits from config
+    design_cfg = (full_cfg or {}).get("design", {})
+    max_amp_len = design_cfg.get("max_amplicon_length", 300)
+    min_amp_len = design_cfg.get("min_amplicon_length", 90)
+
+    # Embed Chart.js from local file (fully self-contained HTML)
+    chartjs_path = Path(__file__).parent / "chartjs_4.4.1.min.js"
+    chartjs_src = chartjs_path.read_text(encoding="utf-8")
+
     sn = {name: short_name(name) for name in seq_names}
     colors = {name: PALETTE[i % len(PALETTE)] for i, name in enumerate(seq_names)}
 
-    js_data = build_js_data(data, sn, colors)
+    js_data = build_js_data(data, sn, colors, max_amp_len, min_amp_len)
 
     # Reference species for title fallback
     parts = ref_name.split("_")
@@ -224,45 +264,45 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{h_main} {h_coloured}{h_last}</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>{chartjs_src}</script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,400&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {{
     /* ── Surfaces ── */
-    --bg:      #f2f4f7;
-    --bg2:     #ffffff;
-    --bg3:     #e8ecf2;
-    --bg4:     #dde2eb;
-    --border:  #c8d0dc;
+    --bg:      #e8ede6;
+    --bg2:     #f2f5ef;
+    --bg3:     #dae1d4;
+    --bg4:     #cdd6c6;
+    --border:  #b4c0ac;
     /* ── Text ── */
-    --text:    #1a2535;
-    --dim:     #3d5068;
-    --muted:   #8a9db8;
+    --text:    #0e1a0d;
+    --dim:     #374832;
+    --muted:   #5f7358;
     /* ── Semantic colours ── */
-    --accent:  #0da888;
-    --teal:    #0da888;
-    --gold:    #d97706;
-    --cyan:    #0284c7;
+    --accent:  #1d6457;
+    --teal:    #1d6457;
+    --gold:    #c98a18;
+    --cyan:    #1a7a9e;
     --green:   #16a34a;
-    --coral:   #dc2626;
-    --purple:  #7c3aed;
-    --orange:  #ea580c;
+    --coral:   #b83228;
+    --purple:  #6e3ab8;
+    --orange:  #b85c14;
     /* ── Primer pair colours ── */
-    --primer-fwd: #d97706;
-    --primer-rev: #0da888;
+    --primer-fwd: #c98a18;
+    --primer-rev: #1d6457;
     /* ── Transparent variants ── */
-    --green-bg:   rgba(22,163,74,0.1);
-    --gold-bg:    rgba(217,119,6,0.1);
-    --coral-bg:   rgba(220,38,38,0.1);
-    --cyan-bg:    rgba(2,132,199,0.1);
-    --purple-bg:  rgba(124,58,237,0.1);
-    --fwd-bg:     rgba(217,119,6,0.06);
-    --rev-bg:     rgba(13,168,136,0.06);
-    --amplicon:   rgba(13,168,136,0.08);
-    --flag-bg:    rgba(217,119,6,0.12);
-    --diff-bg:    rgba(220,38,38,0.1);
-    --sel-sp:     rgba(22,163,74,0.08);
-    --sel-sp-hov: rgba(22,163,74,0.15);
+    --green-bg:   rgba(22,163,74,0.14);
+    --gold-bg:    rgba(201,138,24,0.14);
+    --coral-bg:   rgba(184,50,40,0.12);
+    --cyan-bg:    rgba(26,122,158,0.10);
+    --purple-bg:  rgba(110,58,184,0.10);
+    --fwd-bg:     rgba(201,138,24,0.08);
+    --rev-bg:     rgba(29,100,87,0.08);
+    --amplicon:   rgba(29,100,87,0.10);
+    --flag-bg:    rgba(201,138,24,0.14);
+    --diff-bg:    rgba(184,50,40,0.12);
+    --sel-sp:     rgba(22,163,74,0.10);
+    --sel-sp-hov: rgba(22,163,74,0.18);
     /* ── Typography ── */
     --font-mono: 'IBM Plex Mono', monospace;
     --font-head: 'Playfair Display', serif;
@@ -364,7 +404,7 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
 
   /* ── ALIGNMENT ── */
   .aln-viewer {{
-    overflow: auto; max-height: 400px;
+    overflow-x: auto; overflow-y: hidden;
     background: var(--bg); border-radius: 6px;
     border: 1px solid var(--border); padding: 12px;
   }}
@@ -484,8 +524,9 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
   <div class="chip-row">
     <div class="chip">Sequences: <b>{len(seq_names)}</b></div>
     <div class="chip">Alignment: <b>{align_len:,} bp</b></div>
-    <div class="chip">Primer sets: <b>{n_primer_sets}</b></div>
-    <div class="chip">Ref: <b>{ref_acc}</b></div>
+    <label class="chip" style="cursor:pointer;user-select:none;" title="Hide primers that amplify any off-target sequence">
+      <input type="checkbox" id="hideOffTargetToggle" style="margin:0 4px 0 0;vertical-align:middle;accent-color:var(--teal);"> Hide off-target hits
+    </label>
   </div>
 </div>
 
@@ -539,17 +580,14 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
       <span><span style="color:var(--primer-fwd);font-weight:700">■</span> FWD primer</span>
       <span><span style="color:var(--primer-rev);font-weight:700">■</span> REV primer</span>
     </div>
-    <div style="display:flex;">
-      <div style="flex-shrink:0;display:flex;flex-direction:column;">
-        <div id="varYAxis" style="height:60px;flex-shrink:0;display:flex;flex-direction:column;justify-content:space-between;padding-right:4px;text-align:right;font-family:var(--font-mono);font-size:8px;color:var(--muted);">
+    <div id="alnHScroll" style="overflow-x:auto;overflow-y:hidden;">
+      <div style="display:flex;">
+        <div id="varYAxis" style="height:60px;display:flex;flex-direction:column;justify-content:space-between;padding-right:4px;text-align:right;font-family:var(--font-mono);font-size:8px;color:var(--muted);width:140px;flex-shrink:0;position:sticky;left:0;z-index:2;background:var(--bg2);">
           <span>100</span><span>0</span>
         </div>
-        <div id="alnLabels" style="overflow:hidden;flex:1;min-height:0;"></div>
-      </div>
-      <div style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;" id="alnHScroll">
         <canvas id="varChart" style="display:block;height:60px;"></canvas>
-        <div id="alnSeqs" style="overflow-y:auto;overflow-x:hidden;max-height:250px;"></div>
       </div>
+      <div id="alnRows"></div>
     </div>
   </div>
 
@@ -583,7 +621,7 @@ def generate_html(data: dict, header_cfg: dict | None = None) -> str:
 </div>
 
 <div class="footnote">
-  <em>{ref_species}</em> · {ref_acc} · {len(seq_names)} sequences · {n_primer_sets} primer set(s) analysed
+  <em>{ref_species}</em> · {len(seq_names)} sequences
 </div>
 
 <!-- JAVASCRIPT -->
@@ -629,17 +667,42 @@ const CHART_TOOLTIP = {{ backgroundColor: THEME.tooltipBg, borderColor: THEME.to
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function speciesLabel(name) {{
+  // Space-separated NCBI header: "NC_014696.1 Leggadina lakedownensis ..."
+  const accRe = /^[A-Z]{{1,3}}_?\d{{5,}}(\.\d+)?$/;
+  if (name.includes(' ')) {{
+    const parts = name.split(' ');
+    const acc = parts[0];
+    const isRef = parts[parts.length-1] === 'REF';
+    const meta = ['mitochondrion,','mitochondrion','isolate','strain','voucher',
+                  'breed','complete','partial','genome','genome,','sequence'];
+    const words = [];
+    for (let i = 1; i < parts.length; i++) {{
+      if (parts[i] === 'REF') continue;
+      if (meta.includes(parts[i].toLowerCase())) break;
+      words.push(parts[i]);
+    }}
+    const sp = words.length ? words.join(' ') : acc;
+    return {{sp, acc: acc + (isRef ? ' · REF' : ''), isRef}};
+  }}
+  // Underscore-separated
   const p = name.split('_');
   const isRef = p[p.length-1] === 'REF';
-  let sp, acc;
-  if (p[1] && /^\\d+$/.test(p[1])) {{
-    acc = p[0]+'_'+p[1] + (isRef ? ' · REF' : '');
-    sp = p.slice(2, isRef ? -1 : undefined).join(' ');
-  }} else {{
-    acc = p[0] + (isRef ? ' · REF' : '');
-    sp = p.slice(1, isRef ? -1 : undefined).join(' ');
+  const parts = isRef ? p.slice(0, -1) : p;
+  // Try to find accession from leading parts (e.g. NC_014696.1)
+  let acc = null, spParts = parts;
+  for (let i = 1; i < Math.min(parts.length, 3); i++) {{
+    const cand = parts.slice(0, i+1).join('_');
+    if (accRe.test(cand)) {{ acc = cand; spParts = parts.slice(i+1); break; }}
   }}
-  return {{sp, acc, isRef}};
+  if (!acc && accRe.test(parts[0])) {{ acc = parts[0]; spParts = parts.slice(1); }}
+  // No accession — treat as species name
+  if (!acc) {{
+    const sp = spParts.length ? spParts.join(' ') : parts.join(' ');
+    return {{sp, acc: '', isRef}};
+  }}
+  const tag = acc + (isRef ? ' · REF' : '');
+  const sp = spParts.length ? spParts.join(' ') : acc;
+  return {{sp, acc: tag, isRef}};
 }}
 
 function ssDisplay(val) {{
@@ -652,6 +715,23 @@ function gcClamp(seq) {{
   const gc = [...tail].filter(c => c==='G'||c==='C').length;
   return `${{gc}}/5 (${{tail}})`;
 }}
+
+// ── OFF-TARGET FILTER ───────────────────────────────────────────────────────
+let hideOffTarget = false;
+
+function primerHasOffTarget(primerSeq, isFwd) {{
+  return PRIMER_SETS.some(ps => {{
+    if (isFwd ? ps.fwd !== primerSeq : ps.rev !== primerSeq) return false;
+    return ps.ecopcr && ps.ecopcr.total_hits > 0;
+  }});
+}}
+
+document.getElementById('hideOffTargetToggle').addEventListener('change', function() {{
+  hideOffTarget = this.checked;
+  buildPrimerIndex();
+  buildPrimerTrack();
+  updateAll();
+}});
 
 // ── SPECIES FILTER ──────────────────────────────────────────────────────────
 let selectedSpecies = new Set();
@@ -710,8 +790,6 @@ function buildPrimerIndex() {{
   uniqueFwds = Object.values(fwdMap).sort((a,b) => a.start - b.start);
   uniqueRevs = Object.values(revMap).sort((a,b) => a.start - b.start);
 
-  if (selectedFwdIdx === null && uniqueFwds.length > 0) selectedFwdIdx = 0;
-  if (selectedRevIdx === null && uniqueRevs.length > 0) selectedRevIdx = 0;
   syncActivePrimerSet();
 }}
 
@@ -727,6 +805,7 @@ function syncActivePrimerSet() {{
 function currentPairMatches() {{
   if (selectedFwdIdx === null || selectedRevIdx === null) return false;
   const ps = PS();
+  if (!ps) return false;
   return ps.fwd === uniqueFwds[selectedFwdIdx].seq && ps.rev === uniqueRevs[selectedRevIdx].seq;
 }}
 
@@ -753,6 +832,8 @@ function bestHitsForPrimer(seq, isFwd) {{
 function isCompatible(fwdItem, revItem) {{
   // REV must start after FWD ends (no negative amplicons)
   if (revItem.start <= fwdItem.end) return false;
+  const ampLen = revItem.end - fwdItem.start;
+  if (ampLen > MAX_AMP_LEN || ampLen < MIN_AMP_LEN) return false;
   const deltaTm = Math.abs(fwdItem.tm - revItem.tm);
   return deltaTm <= 5;
 }}
@@ -787,8 +868,9 @@ function buildPrimerTrack() {{
   fwdSorted.forEach(item => {{
     const fi = item.fi;
     const f = uniqueFwds[fi];
+    if (hideOffTarget && primerHasOffTarget(f.seq, true)) return;
     const leftPct = (f.start / ALIGN_LEN) * 100;
-    const widthPct = Math.max(0.5, ((f.end - f.start) / ALIGN_LEN) * 100);
+    const widthPct = Math.max(0.5, (f.len / ALIGN_LEN) * 100);
     const isSelected = fi === selectedFwdIdx;
     const sameTrackGrey = selFwd && !isSelected;
     const compatible = sameTrackGrey ? false : (selRev ? isCompatible(f, selRev) : true);
@@ -799,7 +881,6 @@ function buildPrimerTrack() {{
     bar.style.cssText = `left:${{leftPct}}%;width:${{widthPct}}%;min-width:6px;top:${{item.row * 16}}px;height:14px;`
       + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-fwd)' : THEME.gold+'99'}};color:#fff;`
                              : `background:var(--bg4);color:var(--muted);border:1px solid ${{THEME.gold}}66;`);
-    bar.textContent = widthPct > 2 ? f.seq.substring(0,6)+'…' : '';
     bar.title = `FWD: ${{f.seq}}\nTm: ${{f.tm}}°C · GC: ${{f.gc_pct}}% · ${{f.len}} bp\nUsed by ${{f.indices.length}} pair(s)`;
     bar.addEventListener('click', () => {{
       selectedFwdIdx = selectedFwdIdx === fi ? null : fi;
@@ -833,8 +914,9 @@ function buildPrimerTrack() {{
   revSorted.forEach(item => {{
     const ri = item.ri;
     const r = uniqueRevs[ri];
+    if (hideOffTarget && primerHasOffTarget(r.seq, false)) return;
     const leftPct = (r.start / ALIGN_LEN) * 100;
-    const widthPct = Math.max(0.5, ((r.end - r.start) / ALIGN_LEN) * 100);
+    const widthPct = Math.max(0.5, (r.len / ALIGN_LEN) * 100);
     const isSelected = ri === selectedRevIdx;
     const sameTrackGrey = selRev && !isSelected;
     const compatible = sameTrackGrey ? false : (selFwd ? isCompatible(selFwd, r) : true);
@@ -845,7 +927,6 @@ function buildPrimerTrack() {{
     bar.style.cssText = `left:${{leftPct}}%;width:${{widthPct}}%;min-width:6px;top:${{item.row * 16}}px;height:14px;`
       + (compatible && ampOk ? `background:${{isSelected ? 'var(--primer-rev)' : THEME.teal+'99'}};color:#fff;`
                              : `background:var(--bg4);color:var(--muted);border:1px solid ${{THEME.teal}}66;`);
-    bar.textContent = widthPct > 2 ? r.seq.substring(0,6)+'…' : '';
     bar.title = `REV: ${{r.seq}}\nTm: ${{r.tm}}°C · GC: ${{r.gc_pct}}% · ${{r.len}} bp\nUsed by ${{r.indices.length}} pair(s)`;
     bar.addEventListener('click', () => {{
       selectedRevIdx = selectedRevIdx === ri ? null : ri;
@@ -1060,7 +1141,7 @@ function buildHitTable() {{
 function buildEcoPCR() {{
   const section = document.getElementById('ecopcrSection');
   const ps = PS();
-  const eco = ps.ecopcr;
+  const eco = ps ? ps.ecopcr : null;
 
   const tbody = document.getElementById('ecopcrTableBody');
   tbody.innerHTML = '';
@@ -1105,17 +1186,15 @@ function charWidth() {{
 }}
 
 function buildAlignment() {{
-  const labels = document.getElementById('alnLabels');
-  const seqs = document.getElementById('alnSeqs');
+  const rows = document.getElementById('alnRows');
   const canvas = document.getElementById('varChart');
-  labels.innerHTML = '';
-  seqs.innerHTML = '';
+  rows.innerHTML = '';
 
   const fwd = selectedFwdIdx !== null ? uniqueFwds[selectedFwdIdx] : null;
   const rev = selectedRevIdx !== null ? uniqueRevs[selectedRevIdx] : null;
 
   if (!fwd || !rev || !Object.keys(GAPPED).length) {{
-    seqs.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Select a FWD and REV primer</div>';
+    rows.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Select a FWD and REV primer</div>';
     canvas.width = 0;
     return;
   }}
@@ -1123,7 +1202,7 @@ function buildAlignment() {{
   const start = fwd.start;
   const end = rev.end;
   if (end <= start) {{
-    seqs.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">REV is before FWD</div>';
+    rows.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">REV is before FWD</div>';
     canvas.width = 0;
     return;
   }}
@@ -1134,22 +1213,25 @@ function buildAlignment() {{
   const cw = charWidth();
   const totalSeqWidth = regionLen * cw;
 
-  // Build labels and sequence rows
+  // Build unified rows — each row contains a sticky label + scrollable sequence
   SEQ_NAMES.forEach(name => {{
     const fullSeq = GAPPED[name];
     if (!fullSeq) return;
     const slice = fullSeq.substring(start, end).toUpperCase();
 
-    // Label
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;';
+
+    // Label — sticky so it stays visible during horizontal scroll
     const lbl = document.createElement('div');
-    lbl.style.cssText = `font-size:10px;color:${{COLORS[name]}};padding-right:8px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.7;width:140px;`;
+    lbl.style.cssText = `font-size:10px;color:${{COLORS[name]}};padding-right:8px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.7;width:140px;flex-shrink:0;position:sticky;left:0;z-index:1;background:var(--bg2);`;
     if (name.includes('REF')) lbl.style.fontWeight = '600';
     lbl.textContent = SHORT[name];
-    labels.appendChild(lbl);
+    row.appendChild(lbl);
 
     // Sequence
     const seqEl = document.createElement('div');
-    seqEl.style.cssText = `font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.2px;white-space:pre;line-height:1.7;width:${{totalSeqWidth}}px;`;
+    seqEl.style.cssText = `font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.2px;white-space:pre;line-height:1.7;width:${{totalSeqWidth}}px;flex-shrink:0;`;
     let html = '';
     for (let i = 0; i < slice.length; i++) {{
       const gPos = start + i;
@@ -1163,14 +1245,9 @@ function buildAlignment() {{
       }}
     }}
     seqEl.innerHTML = html;
-    seqs.appendChild(seqEl);
+    row.appendChild(seqEl);
+    rows.appendChild(row);
   }});
-
-  // Set explicit width so alnHScroll knows the content width
-  seqs.style.width = totalSeqWidth + 'px';
-
-  // Sync vertical scroll: labels track sequences
-  seqs.onscroll = () => {{ labels.scrollTop = seqs.scrollTop; }};
 
   // Draw variability directly on canvas — one bar per character position
   const allSeqs = SEQ_NAMES.map(n => GAPPED[n]).filter(Boolean);
@@ -1418,16 +1495,17 @@ def main():
     with open(json_path) as f:
         data = json.load(f)
 
-    # Load header config if provided
+    # Load config if provided
     header_cfg = None
+    full_cfg = None
     if args.config:
         try:
             import yaml
             cfg_path = Path(args.config)
             if cfg_path.exists():
                 with open(cfg_path) as f:
-                    raw = yaml.safe_load(f)
-                header_cfg = raw.get("header")
+                    full_cfg = yaml.safe_load(f)
+                header_cfg = full_cfg.get("header")
         except ImportError:
             pass
 
@@ -1435,7 +1513,7 @@ def main():
     print(f"  {data['meta'].get('n_primer_sets', '?')} primer set(s)")
     print("Generating HTML ...")
 
-    html = generate_html(data, header_cfg)
+    html = generate_html(data, header_cfg, full_cfg)
 
     out_path = Path(args.output)
     with open(out_path, "w") as f:

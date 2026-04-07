@@ -30,15 +30,43 @@ except ImportError:
 REQUIRED_KEYS = ["tm_range", "gc_range", "max_hairpin_dg", "max_homodimer_dg",
                  "max_homopolymer", "gc_clamp_3prime"]
 
-# Hard-reject thresholds: if ANY of these fail, the primer is rejected.
-HARD_REJECT = {"tm_out_of_range", "hairpin"}
+# Map from config key to the flag name used in validation results
+CONFIG_KEY_TO_FLAG = {
+    "tm_range": "tm_out_of_range",
+    "gc_range": "gc_out_of_range",
+    "max_hairpin_dg": "hairpin",
+    "max_homodimer_dg": "homodimer",
+    "max_homopolymer": "homopolymer",
+    "gc_clamp_3prime": "gc_clamp",
+}
 
 
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
+def _parse_thermo_entry(key, entry):
+    """Parse a thermodynamics config entry. Supports both formats:
+    - New: {value: ..., action: reject|flag}
+    - Legacy: bare value (defaults to reject)
+    """
+    if isinstance(entry, dict):
+        if "value" not in entry:
+            print(f"ERROR: thermodynamics.{key} is missing 'value'", file=sys.stderr)
+            sys.exit(1)
+        action = entry.get("action", "reject").lower()
+        if action not in ("reject", "flag"):
+            print(f"ERROR: thermodynamics.{key}.action must be 'reject' or 'flag', got '{action}'",
+                  file=sys.stderr)
+            sys.exit(1)
+        return entry["value"], action
+    # Legacy bare value — default to reject
+    return entry, "reject"
+
+
 def load_config(path):
-    """Load thermodynamic thresholds from YAML config. Exits if config is missing."""
+    """Load thermodynamic thresholds from YAML config. Exits if config is missing.
+    Returns (values_dict, hard_reject_set) where hard_reject_set contains flag names
+    for checks configured as 'reject'."""
     if path is None:
         print("ERROR: --config is required. No config file specified.", file=sys.stderr)
         sys.exit(1)
@@ -59,7 +87,16 @@ def load_config(path):
     if missing:
         print(f"ERROR: Config missing required keys: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
-    return {k: thermo[k] for k in REQUIRED_KEYS}
+
+    values = {}
+    hard_reject = set()
+    for key in REQUIRED_KEYS:
+        val, action = _parse_thermo_entry(key, thermo[key])
+        values[key] = val
+        if action == "reject" and key in CONFIG_KEY_TO_FLAG:
+            hard_reject.add(CONFIG_KEY_TO_FLAG[key])
+
+    return values, hard_reject
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +281,9 @@ def max_homopolymer(seq):
 # ---------------------------------------------------------------------------
 # Individual primer validation
 # ---------------------------------------------------------------------------
-def validate_primer(seq, cfg):
-    """Validate a single primer sequence. Returns dict of metrics + flags."""
+def validate_primer(seq, cfg, hard_reject):
+    """Validate a single primer sequence. Returns dict of metrics + flags.
+    hard_reject: set of flag names that cause rejection (from config actions)."""
     seq = seq.strip().upper()
 
     tm = calc_tm(seq)
@@ -285,8 +323,8 @@ def validate_primer(seq, cfg):
     if homopoly > cfg["max_homopolymer"]:
         flags.append("homopolymer")
 
-    # Hard reject vs soft flag
-    hard = HARD_REJECT & set(flags)
+    # Hard reject vs soft flag — determined by config actions
+    hard = hard_reject & set(flags)
 
     row["flags"] = ";".join(flags) if flags else ""
     row["status"] = "REJECT" if hard else ("FLAG" if flags else "PASS")
@@ -306,9 +344,10 @@ OUTPUT_COLUMNS = [
 
 
 def run(input_csv, output_csv, config_path, keep_rejected):
-    cfg = load_config(config_path)
+    cfg, hard_reject = load_config(config_path)
     _init_backend()
     print(f"[info] Backend: {_BACKEND}", file=sys.stderr)
+    print(f"[info] Hard-reject checks: {', '.join(sorted(hard_reject)) or 'none'}", file=sys.stderr)
 
     # Extract unique FWD and REV sequences from pairs CSV
     unique_fwd = {}  # seq -> True
@@ -340,7 +379,7 @@ def run(input_csv, output_csv, config_path, keep_rejected):
 
     def _validate_one(item):
         seq, direction = item
-        result = validate_primer(seq, cfg)
+        result = validate_primer(seq, cfg, hard_reject)
         result["direction"] = direction
         return result
 

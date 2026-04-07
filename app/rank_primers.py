@@ -40,11 +40,18 @@ def score_binding_universality(ps):
     return amplified / total
 
 
+def _cfg_val(entry, default=None):
+    """Extract value from a config entry that may be {value:, action:} or a bare value."""
+    if isinstance(entry, dict):
+        return entry.get("value", default)
+    return entry if entry is not None else default
+
+
 def score_thermodynamic_quality(ps, config):
     """Score from primer properties (Tm, GC). Proper NN thermo is in Step 2;
     this uses the Wallace Tm stored in the JSON as a proxy."""
     thermo = config["thermodynamics"]
-    tm_min, tm_max = thermo["tm_range"]
+    tm_min, tm_max = _cfg_val(thermo["tm_range"])
     tm_optimal = (tm_min + tm_max) / 2
 
     props = ps.get("properties", {})
@@ -64,7 +71,7 @@ def score_thermodynamic_quality(ps, config):
 
         gc = info.get("gc_pct")
         if gc is not None:
-            gc_min, gc_max = thermo["gc_range"]
+            gc_min, gc_max = _cfg_val(thermo["gc_range"])
             if gc_min <= gc <= gc_max:
                 scores.append(1.0)
             else:
@@ -75,7 +82,7 @@ def score_thermodynamic_quality(ps, config):
     rev_tm = props.get("rev", {}).get("tm_wallace")
     if fwd_tm is not None and rev_tm is not None:
         delta = abs(fwd_tm - rev_tm)
-        scores.append(max(0.0, 1.0 - delta / thermo["max_delta_tm"]))
+        scores.append(max(0.0, 1.0 - delta / _cfg_val(thermo["max_delta_tm"])))
 
     # Secondary structure penalties
     ss = props.get("secondary_structure", {})

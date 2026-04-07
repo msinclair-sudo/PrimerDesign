@@ -375,19 +375,26 @@ def compute_primer_properties(fwd: str, rev: str) -> dict:
     }
 
 
+def _cfg_val(entry, default=None):
+    """Extract value from a config entry that may be {value:, action:} or a bare value."""
+    if isinstance(entry, dict):
+        return entry.get("value", default)
+    return entry if entry is not None else default
+
+
 def compute_flags(props: dict, thermo_cfg: dict) -> list[str]:
     """Compute thermodynamic flags for a primer pair, matching validate_thermodynamics logic."""
     flags = []
     fwd = props["fwd"]
     rev = props["rev"]
-    tm_lo, tm_hi = thermo_cfg.get("tm_range", [58, 64])
-    gc_lo, gc_hi = thermo_cfg.get("gc_range", [40, 60])
-    clamp_lo, clamp_hi = thermo_cfg.get("gc_clamp_3prime", [1, 3])
-    max_delta_tm = thermo_cfg.get("max_delta_tm", 5)
-    max_hairpin = thermo_cfg.get("max_hairpin_dg", -3.0)
-    max_homodimer = thermo_cfg.get("max_homodimer_dg", -9.0)
-    max_heterodimer = thermo_cfg.get("max_heterodimer_dg", -9.0)
-    max_homopoly = thermo_cfg.get("max_homopolymer", 4)
+    tm_lo, tm_hi = _cfg_val(thermo_cfg.get("tm_range"), [58, 64])
+    gc_lo, gc_hi = _cfg_val(thermo_cfg.get("gc_range"), [40, 60])
+    clamp_lo, clamp_hi = _cfg_val(thermo_cfg.get("gc_clamp_3prime"), [1, 3])
+    max_delta_tm = _cfg_val(thermo_cfg.get("max_delta_tm"), 5)
+    max_hairpin = _cfg_val(thermo_cfg.get("max_hairpin_dg"), -3.0)
+    max_homodimer = _cfg_val(thermo_cfg.get("max_homodimer_dg"), -9.0)
+    max_heterodimer = _cfg_val(thermo_cfg.get("max_heterodimer_dg"), -9.0)
+    max_homopoly = _cfg_val(thermo_cfg.get("max_homopolymer"), 4)
 
     def gc_clamp_count(seq, window=5):
         return sum(1 for b in seq.upper()[-window:] if b in "GC")

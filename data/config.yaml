@@ -18,22 +18,39 @@ decipher:
   min_coverage: 0.8 # Minimum fraction of sequences a primer must bind (0-1)
   resolution: 5 # k-mer size for differentiating amplicon sequences
   max_permutations: 1 # Maximum permutations (degeneracy) per primer; 1 = no degenerate bases
-  num_primer_sets: 200 # Number of primer pairs returned per window
-  search_primers: 500 # Candidate primers in initial search per window
+  num_primer_sets: 200 # Final FWD-REV pairs returned per window (top-scoring combinations)
+  search_primers: 201 # Individual candidate primers DECIPHER evaluates per window (must be > num_primer_sets)
   window_size: 1000 # Sliding window size (bp) for exploring multiple regions
   window_overlap: 200 # Overlap between adjacent windows (bp)
 
 # ── Thermodynamic filtering ───────────────────────────────────────────────────
-# Applied in Step 2 (validate) and Step 2b (expand). REJECT = removed, FLAG = kept with warning.
+# Applied in Step 2 (validate) and Step 2b (expand).
+# Each check has a threshold and an action: "reject" (remove primer) or "flag" (keep with warning).
 thermodynamics:
-  tm_range: [52, 64] # Acceptable melting temperature (degrees C); outside = REJECT
-  max_delta_tm: 5 # Max Tm difference between FWD and REV (degrees C); above = REJECT
-  gc_range: [40, 60] # Acceptable GC content (%); outside = FLAG
-  max_hairpin_dg: -3.0 # Most negative hairpin delta-G allowed (kcal/mol); below = REJECT
-  max_homodimer_dg: -9.0 # Most negative homodimer delta-G allowed (kcal/mol); below = FLAG
-  max_heterodimer_dg: -9.0 # Most negative heterodimer delta-G allowed (kcal/mol); below = FLAG
-  max_homopolymer: 4 # Max consecutive identical bases; above = FLAG
-  gc_clamp_3prime: [1, 3] # G/C count in last 5 bases at 3' end; outside range = FLAG
+  tm_range:
+    value: [52, 64] # Acceptable melting temperature range (degrees C)
+    action: reject
+  max_delta_tm:
+    value: 5 # Max Tm difference between FWD and REV (degrees C)
+    action: reject
+  gc_range:
+    value: [40, 60] # Acceptable GC content range (%)
+    action: reject
+  max_hairpin_dg:
+    value: -3.0 # Most negative hairpin delta-G allowed (kcal/mol)
+    action: reject
+  max_homodimer_dg:
+    value: -9.0 # Most negative homodimer delta-G allowed (kcal/mol)
+    action: reject
+  max_heterodimer_dg:
+    value: -9.0 # Most negative heterodimer delta-G allowed (kcal/mol)
+    action: reject
+  max_homopolymer:
+    value: 4 # Max consecutive identical bases
+    action: reject
+  gc_clamp_3prime:
+    value: [2, 4] # G/C count in last 5 bases at 3' end
+    action: reject
 
 # ── Mismatch tolerances ──────────────────────────────────────────────────────
 # These control how many mismatches obipcr allows per primer in different contexts.

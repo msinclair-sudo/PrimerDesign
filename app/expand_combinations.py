@@ -30,6 +30,13 @@ from validate_thermodynamics import calc_heterodimer, _init_backend
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+def _get_value(entry):
+    """Extract value from a config entry (supports both {value:, action:} and bare value)."""
+    if isinstance(entry, dict):
+        return entry["value"]
+    return entry
+
+
 def load_config(config_path):
     """Load config for thresholds. Exits if config is missing."""
     if config_path is None:
@@ -53,7 +60,7 @@ def load_config(config_path):
     if missing:
         print(f"ERROR: Config missing required keys: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
-    return {k: thermo[k] for k in required}
+    return {k: _get_value(thermo[k]) for k in required}
 
 
 # ---------------------------------------------------------------------------

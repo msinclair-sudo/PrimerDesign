@@ -54,19 +54,20 @@ The database flag accepts a directory containing multiple FASTA files, or a sing
 
 ### Alignment Preparation
 
-Prepare a trimmed, correctly-oriented MSA from raw mitogenome sequences. Handles circular genome artifacts by rotating all sequences to center the target region, realigning with MAFFT, then trimming to the specified gene range:
+Prepare a trimmed, correctly-oriented MSA from raw mitogenome sequences. Handles circular genome artifacts by rotating all sequences to center the target region, realigning with MAFFT, then trimming to the specified gene range. Long runs of N characters (from low-coverage assembly regions) are masked to gap characters before alignment and restored afterwards — see N-masking below.
 
 ```bash
 python Design.py align -i raw_sequences.fasta -g reference.gb --from cytb --to 16S -o aligned_trimmed.fasta
 ```
 
-| Flag              | Description                                          |
-| ----------------- | ---------------------------------------------------- |
-| `-i / --input`    | Input FASTA (unaligned or aligned sequences)         |
-| `-g / --genbank`  | GenBank file for the reference sequence (required)   |
-| `--from`          | Start gene name (e.g. cytb, 12S, Dloop)             |
-| `--to`            | End gene name (e.g. 16S, cytb)                       |
-| `-o / --output`   | Output FASTA (default: `aligned_trimmed.fasta`)      |
+| Flag              | Description                                              |
+| ----------------- | -------------------------------------------------------- |
+| `-i / --input`    | Input FASTA (unaligned or aligned sequences)             |
+| `-g / --genbank`  | GenBank file for the reference sequence (required)       |
+| `--from`          | Start gene name (e.g. cytb, 12S, Dloop)                 |
+| `--to`            | End gene name (e.g. 16S, cytb)                           |
+| `-o / --output`   | Output FASTA (default: `aligned_trimmed.fasta`)          |
+| `--n-mask N`      | Replace N-runs >= N with gaps before alignment (default: 3, 0 to disable) |
 
 ### Debug Mode
 
@@ -112,7 +113,7 @@ All pipeline parameters are controlled through `data/config.yaml`. A custom conf
 
 **design** — Primer length range, amplicon size range, and optimal amplicon size. The amplicon size range controls which primer combinations are considered viable in the expansion and analysis steps.
 
-**decipher** — Parameters for the DECIPHER DesignSignatures algorithm: minimum coverage, resolution, maximum degeneracy, number of primer sets to return, and number of candidate primers in the initial search.
+**decipher** — Parameters for the DECIPHER DesignSignatures algorithm: minimum coverage (fraction of MSA sequences a primer must bind), resolution (k-mer size for amplicon differentiation), maximum degeneracy (permutations per primer; 1 = no degenerate bases), `num_primer_sets` (number of final forward-reverse pairs returned per window — the top-scoring combinations), `search_primers` (number of individual candidate primer sequences DECIPHER evaluates per window — controls how broadly it explores binding sites before forming pairs), and sliding window parameters (`window_size`, `window_overlap`) for scanning long alignments.
 
 **thermodynamics** — Tm range, maximum delta Tm, GC content range, free energy thresholds for hairpin, homodimer, and heterodimer formation, maximum homopolymer run length, and 3-prime GC clamp requirements. Tm and hairpin thresholds are hard-reject (primers removed); all others are soft-flag (kept with warning).
 
@@ -147,11 +148,27 @@ conda activate primer
 
 ## Pipeline Methods
 
+### Alignment Preparation — N-Masking and Restoration
+
+Genome assemblies from low-coverage sequencing often contain long stretches of N characters representing regions where bases could not be called. If left in the sequences, these N-runs cause MAFFT to treat them as real characters and attempt to align them, distorting the surrounding alignment and introducing artificial gaps.
+
+The alignment preparation step handles this with a mask-align-restore strategy:
+
+1. **Mask:** Before alignment, runs of N characters at or above a configurable threshold (default: 3 consecutive Ns) are replaced with gap characters. Short isolated Ns (below the threshold) are left as-is since they may represent genuine single-base ambiguities rather than missing data.
+
+2. **Align:** MAFFT strips gap characters from input sequences before aligning, so the masked N-runs are effectively removed. MAFFT aligns only the real bases (plus any short Ns below the threshold), producing a cleaner alignment without N-driven distortion.
+
+3. **Restore:** After the final alignment, masked Ns are restored in their correct positions. The pipeline tracks which ungapped positions in each original sequence contained masked N-runs, accounting for any reverse-complementation (from MAFFT's `--adjustdirection`) and circular rotation applied during the pipeline. For each sequence, alignment gaps that correspond to originally-masked N positions are converted back to N characters. This preserves the alignment structure while correctly representing ambiguous regions as N rather than as absence (gaps).
+
+The threshold is configurable via `--n-mask` (default 3, set to 0 to disable). The restoration step reports how many N bases were restored and in how many sequences.
+
 ### Step 1 — Primer Design
 
 The pipeline identifies candidate primer binding sites within conserved regions of the input alignment using DECIPHER's DesignSignatures algorithm (Wright, 2016). DECIPHER is an R/Bioconductor package specifically designed for designing PCR primers from multiple sequence alignments. It uses a signature-based approach that maximises the diversity of amplicon sequences (to allow species discrimination) while ensuring the primer binding sites are conserved across the aligned sequences (to allow universal amplification).
 
 The alignment is imported into a DECIPHER sequence database, and DesignSignatures is called with configurable constraints on primer length, amplicon size, GC content, and maximum degeneracy. The number of primer sets returned and the breadth of the initial candidate search are also configurable — increasing these values causes DECIPHER to explore primer binding sites across all gene regions in the alignment rather than concentrating only on the single highest-scoring region.
+
+For alignments longer than a single window, the pipeline uses a **sliding window approach** to ensure primer candidates are discovered across the full length of the alignment. The MSA is divided into overlapping windows (default: 1000 bp windows with 200 bp overlap), and DECIPHER's DesignSignatures is run independently on each window. Primers designed in each window are collected and deduplicated — if the same forward-reverse pair is found in adjacent overlapping windows, only one copy is retained. This strategy prevents DECIPHER from concentrating all candidates in a single high-scoring region and ensures that viable primer sites in lower-scoring but still conserved regions are represented. Window size and overlap are configurable via `decipher.window_size` and `decipher.window_overlap` in the config file. If the alignment is short enough to fit in a single window, the windowing step is skipped and DECIPHER runs on the full alignment directly.
 
 If DECIPHER is not available in the environment, the pipeline falls back to Primer3 via its Python bindings. In this mode, a majority-rule consensus sequence is computed from the alignment, and Primer3 designs primers against that consensus using nearest-neighbour thermodynamic models.
 
@@ -193,6 +210,10 @@ Both binding analysis and off-target screening use obipcr from OBITools4, which 
 
 **In silico PCR on the MSA (Step 3):** For each primer pair, obipcr searches for both primer binding sites allowing a configurable number of mismatches per primer. When both primers bind with an intervening distance within the configured amplicon size range, obipcr reports a successful amplification.
 
+**Pairwise identity matrix:** A full pairwise identity matrix is computed between all sequences in the alignment, counting matching non-gap positions as a fraction of total comparable sites.
+
+**Sliding window identity:** Per-sequence identity relative to the reference is computed using a sliding window across the full alignment. A window of configurable size (default 400 bp) advances in configurable steps (default 100 bp) along the gapped alignment. At each position, pairwise identity between the reference and each other sequence is calculated over the window, requiring a minimum number of non-gap sites for a valid measurement. This produces a per-position identity profile for each sequence, which is displayed as the variability chart in the report.
+
 **GenBank annotation mapping:** When a GenBank file is provided, the pipeline maps genomic features onto the alignment coordinates using BLAST against a doubled copy of the GenBank sequence. Doubling the reference sequence linearises the circular genome, so that regions spanning the origin of replication appear as a single contiguous stretch.
 
 **Off-target screening (Step 4):** For every primer pair that successfully amplifies at least one sequence in the MSA, obipcr is run against the off-target sequence database with a separate mismatch tolerance.
@@ -213,7 +234,7 @@ The analysis results are rendered as a self-contained HTML dashboard. The report
 
 - **Per-position variability chart** — Variability across the full alignment, rendered on the same canvas as the gene annotation track for pixel-perfect alignment.
 - **Gene track** — Coloured gene segments with labels for major regions (coding, rRNA, D-loop). tRNAs are visible on hover.
-- **Primer tracks** — Forward and reverse primers displayed at their binding positions using percentage-based coordinates that scale with window resize. Clicking a primer greys out incompatible partners (delta Tm too high). Selecting a primer greys out other primers on the same track.
+- **Primer tracks** — Forward and reverse primers displayed at their binding positions using percentage-based coordinates that scale with window resize. No primers are pre-selected on load. Clicking a primer greys out incompatible partners — those where the resulting amplicon would fall outside the configured size range (`design.min_amplicon_length` / `design.max_amplicon_length`) or where the delta Tm exceeds 5 °C.
 - **Selected primer detail** — Sequences, Tm, hairpin, homodimer, homopolymer, GC clamp, delta Tm, amplicon length, and amplification count.
 - **Amplification prediction table** — Per-species mismatch data for the selected primer combination. Shows confirmed results (YES/NO) for tested pairs and mismatch estimates for untested combinations.
 - **Amplicon alignment viewer** — Gapped MSA region between selected primers with FWD/REV regions coloured. Scrolls horizontally and vertically independently. Per-position variability bar chart aligned to sequence columns below.
