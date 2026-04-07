@@ -18,8 +18,8 @@ decipher:
   min_coverage: 0.8 # Minimum fraction of sequences a primer must bind (0-1)
   resolution: 5 # k-mer size for differentiating amplicon sequences
   max_permutations: 1 # Maximum permutations (degeneracy) per primer; 1 = no degenerate bases
-  num_primer_sets: 200 # Final FWD-REV pairs returned per window (top-scoring combinations)
-  search_primers: 201 # Individual candidate primers DECIPHER evaluates per window (must be > num_primer_sets)
+  num_primer_sets: 100 # Final FWD-REV pairs returned per window (top-scoring combinations)
+  search_primers: 101 # Individual candidate primers DECIPHER evaluates per window (must be > num_primer_sets)
   window_size: 1000 # Sliding window size (bp) for exploring multiple regions
   window_overlap: 200 # Overlap between adjacent windows (bp)
 
