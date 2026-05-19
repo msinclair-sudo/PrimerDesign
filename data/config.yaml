@@ -11,7 +11,6 @@ design:
   max_primer_length: 25 # Longest primer to consider (bp)
   min_amplicon_length: 90 # Shortest acceptable amplicon (bp); used in design, expand, and on-target binding
   max_amplicon_length: 300 # Longest acceptable amplicon (bp); used in design, expand, and on-target binding
-  optimal_amplicon_length: 130 # Target amplicon size for ranking (bp)
 
 # ── DECIPHER DesignSignatures ─────────────────────────────────────────────────
 decipher:
@@ -69,12 +68,3 @@ ecopcr:
   min_amplicon_length: 10 # Shortest off-target amplicon to report (bp)
   max_amplicon_length: 500 # Longest off-target amplicon to report (bp)
   circular: true # Treat database sequences as circular (e.g. mitogenomes)
-
-# ── Ranking weights ──────────────────────────────────────────────────────────
-# Weights for the five scoring components (must sum to 1.0).
-ranking:
-  binding_universality: 0.25 # Fraction of MSA sequences amplified
-  thermodynamic_quality: 0.20 # Tm optimality, low delta-Tm, minimal secondary structures
-  species_resolution: 0.20 # Proportion of variable positions in amplicon
-  off_target_specificity: 0.20 # Off-target hit quality from ecoPCR
-  amplicon_suitability: 0.15 # Closeness to optimal amplicon length

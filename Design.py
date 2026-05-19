@@ -16,6 +16,7 @@ Usage:
     python Design.py align -i raw_sequences.fasta -g reference.gb --from cytb --to 16S
 
     # Debug mode (run individual pipeline step)
+    # Steps: design, validate, expand, analyse, report
     python Design.py debug <step> -i alignment.fasta
 """
 
@@ -29,7 +30,7 @@ APP_DIR = Path(__file__).parent / "app"
 CONFIG = Path(__file__).parent / "data" / "config.yaml"
 DEFAULT_OUTPUT = Path("data/output")
 
-STEPS = ["design", "validate", "expand", "analyse", "rank", "report"]
+STEPS = ["design", "validate", "expand", "analyse", "report"]
 
 
 def run(cmd, desc, env=None):
@@ -86,7 +87,6 @@ def cmd_pipeline(args):
     primers_validated = output_dir / "primers" / "primers_validated.csv"
     primers_expanded = output_dir / "primers" / "primers_expanded.csv"
     analysis_json = output_dir / "analysis" / "results.json"
-    ranked_csv = output_dir / "analysis" / "primers_ranked.csv"
     report_html = output_dir / "report.html"
 
     def run_design():
@@ -130,16 +130,10 @@ def cmd_pipeline(args):
             "Steps 3+4: Binding analysis + ecoPCR + annotations",
             env=run_env),
 
-        "rank": lambda: run(
-            [sys.executable, str(APP_DIR / "rank_primers.py"),
-             str(analysis_json), "-o", str(ranked_csv), "--config", args.config],
-            "Step 5: Rank primers",
-            env=run_env),
-
         "report": lambda: run(
             [sys.executable, str(APP_DIR / "generate_report.py"),
              str(analysis_json), "-o", str(report_html), "--config", args.config],
-            "Step 6: Generate HTML report",
+            "Step 5: Generate HTML report",
             env=run_env),
     }
 
@@ -149,7 +143,6 @@ def cmd_pipeline(args):
     if len(args.run_steps) == len(STEPS):
         print(f"\n{'='*60}")
         print(f"  Pipeline complete!")
-        print(f"  Ranked primers: {ranked_csv}")
         print(f"  Report: {report_html}")
         print(f"{'='*60}")
 

@@ -2,7 +2,184 @@
 
 A pipeline for designing and validating metabarcoding primers from a multiple sequence alignment. It identifies candidate primer binding sites, validates their thermodynamic properties, tests binding across all sequences in the alignment, screens for off-target amplification against a broader sequence database, and ranks the results — producing an interactive report for primer selection.
 
+This README has two parts:
+- **[User Guide](#user-guide)** — install, run the example, interpret the report, fix common errors.
+- **[Reference Documentation](#reference-documentation)** — every flag, config field, and pipeline step in detail.
+
 ---
+
+# User Guide
+
+## 1. Install
+
+The pipeline runs in a conda environment named `primer`. All dependencies (Python, R/DECIPHER, MAFFT, OBITools4, BLAST+) install from `environment.yml`.
+
+```bash
+conda env create -f environment.yml
+conda activate primer
+```
+
+You must `conda activate primer` in every new shell before running the pipeline.
+
+## 2. Run the example
+
+A small rodent mitogenome panel is bundled under `data/example/input/`. Run it end-to-end to confirm the install works:
+
+```bash
+python Design.py -i data/example/input/rodent_cytb_16S.fasta -g data/example/input/NC_006914.1.gb
+```
+
+On a laptop this takes a few minutes. The pipeline prints a banner for each of the six steps as it runs:
+
+```
+============================================================
+  Step 1: Design primers from MSA
+============================================================
+...
+  Pipeline complete!
+  Ranked primers: data/output/analysis/primers_ranked.csv
+  Report: data/output/report.html
+============================================================
+```
+
+Open `data/output/report.html` in any browser — no server needed.
+
+## 3. Use your own data
+
+### Required: an aligned FASTA
+
+The input is a multiple sequence alignment — one record per species, all sequences the same length, gap characters (`-`) inserted to keep homologous positions in the same column. Any aligner works: MAFFT, MUSCLE, ClustalO, Geneious, or manual curation. The first record in the file is treated as the reference.
+
+If your sequences are *not* yet aligned, either align them yourself with your tool of choice, or use the bundled preparation step. It handles circular mitogenome rotation (so a region spanning the origin appears contiguous), runs MAFFT, and trims to a named gene range:
+
+```bash
+python Design.py align -i raw_sequences.fasta -g reference.gb \
+    --from cytb --to 16S -o my_alignment.fasta
+```
+
+Full details in the [Alignment Preparation](#alignment-preparation) reference.
+
+### Recommended: a GenBank reference (`.gb`)
+
+The `.gb` file provides the gene annotation track in the report — coding regions, rRNAs, tRNAs, and the D-loop are mapped onto your alignment coordinates so you can see which region a primer targets.
+
+Download one from NCBI Nucleotide for any species in your MSA: open the record → Send To → File → Format: **GenBank (full)**. The record must match an MSA sequence either by accession (header) or by sequence identity, so the pipeline can BLAST the features onto the alignment.
+
+Place the `.gb` in the same directory as your FASTA and it is auto-detected:
+
+```bash
+python Design.py -i my_alignment.fasta
+```
+
+Or pass it explicitly:
+
+```bash
+python Design.py -i my_alignment.fasta -g reference.gb
+```
+
+Without a `.gb` the pipeline still runs, but the report's gene track will be blank.
+
+### Optional: an off-target database
+
+A directory of FASTA files (or a single FASTA) containing related taxa you do *not* want to amplify. Enables the specificity screen in Step 4 — every primer pair that amplifies in your MSA is tested against the database with a separate (usually more permissive) mismatch tolerance:
+
+```bash
+python Design.py -i my_alignment.fasta -d off_target_seqs/
+```
+
+Without `-d`, the off-target table in the report is empty but every other step still runs.
+
+## 4. Configure the run — `data/config.yaml`
+
+**Before running the pipeline on your own data, open `data/config.yaml` and skim it.** This single file controls every numeric threshold in the pipeline — primer length, amplicon size, Tm window, mismatch tolerance, ranking weights. Defaults are tuned for a short eDNA metabarcoding amplicon (~90-300 bp) and may not suit your assay.
+
+Either edit `data/config.yaml` in place, or copy it to a new file and pass it with `-c`:
+
+```bash
+cp data/config.yaml my_config.yaml
+# ...edit my_config.yaml...
+python Design.py -i my_alignment.fasta -c my_config.yaml
+```
+
+The config has six sections. The ones you are most likely to change:
+
+**`design`** — primer length and amplicon size bounds.
+- `min_primer_length` / `max_primer_length` — primer length range (default 18-25 bp).
+- `min_amplicon_length` / `max_amplicon_length` — acceptable amplicon size (default 90-300 bp). Tighten for short-read eDNA, loosen for long-amplicon assays.
+
+**`decipher`** — primer discovery (DECIPHER DesignSignatures).
+- `min_coverage` — fraction of MSA sequences a primer must bind. Lower this (e.g. 0.6) for divergent species panels.
+- `max_permutations` — degeneracy budget per primer; 1 = no degenerate bases. Raise to 4-16 if too few candidates pass.
+- `num_primer_sets` / `search_primers` — how many candidates per sliding window. Raise to explore more binding sites.
+- `window_size` / `window_overlap` — sliding window across long alignments.
+
+**`thermodynamics`** — per-primer and per-pair quality filters. Each check has a `value:` and an `action:` (`reject` removes the primer, `flag` keeps it with a warning).
+- `tm_range` — acceptable Tm window (default 52-64 °C).
+- `max_delta_tm` — max Tm difference between forward and reverse.
+- `gc_range`, `max_hairpin_dg`, `max_homodimer_dg`, `max_heterodimer_dg`, `max_homopolymer`, `gc_clamp_3prime`.
+- Tighten `action: reject` on items you care about most; soften to `flag` when too few primers survive.
+
+**`mismatches`** — how forgiving binding searches are.
+- `on_target` — mismatches allowed per primer when scanning your MSA (default 2).
+- `off_target` — mismatches allowed per primer when screening the off-target database (default 3 — usually wider, since off-target organisms may bind weakly but still amplify).
+
+**`ecopcr`** — off-target screen behavior.
+- `min_amplicon_length` / `max_amplicon_length` — amplicon size range to report off-target.
+- `circular` — treat database sequences as circular (true for mitogenomes).
+
+**`header`** — cosmetic title text shown in the HTML report.
+
+Full per-field reference (with the rationale behind each default) is in the [Configuration](#configuration) section below.
+
+## 5. Evaluate existing primers
+
+To run published or in-house primers through the same validation, binding, and ranking pipeline, supply them as a CSV with columns `name`, `forward`, `reverse`:
+
+```bash
+python Design.py -i my_alignment.fasta -p my_primers.csv
+```
+
+The design step is skipped and your primers flow through everything else.
+
+## 6. Read the report
+
+The HTML report (`data/output/report.html`) is the main deliverable. Key panels:
+
+- **Gene track and variability chart** — Where conserved and variable regions sit along your alignment. Look for primers that span conserved flanks with a variable interior.
+- **Primer tracks** — Forward (top) and reverse (bottom) primers at their binding positions. Click one to grey out incompatible partners (wrong amplicon size or delta-Tm > 5 °C).
+- **Selected primer detail** — Tm, hairpin/dimer energies, GC clamp, amplicon length, number of species amplified.
+- **Amplification prediction table** — Per-species hit/miss with mismatch counts.
+- **Amplicon alignment viewer** — Gapped MSA region between selected primers, with FWD/REV regions coloured.
+- **ecoPCR specificity table** — Off-target hits (only populated if you used `-d`).
+
+The full per-primer data (binding hits, identity matrices, ecoPCR results) is in `data/output/analysis/results.json` if you want to do your own downstream filtering.
+
+## 7. Re-run a single step
+
+To regenerate the report from existing results, or re-run analysis with a different mismatch tolerance, use debug mode instead of running the whole pipeline:
+
+```bash
+python Design.py debug report   # just regenerate report.html from existing results.json
+python Design.py debug analyse -i my_alignment.fasta -d off_target_seqs/
+```
+
+Steps: `design`, `validate`, `expand`, `analyse`, `report`.
+
+## 8. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Rscript: command not found` or DECIPHER errors | R/DECIPHER not in the active env | Confirm `conda activate primer`; reinstall with `conda env create -f environment.yml` |
+| `obipcr: command not found` | OBITools4 missing | Same — `obitools4` is in `environment.yml` |
+| Gene track is blank in report | GenBank record doesn't match any MSA sequence by accession or identity | Pass `-g` explicitly to the right `.gb` file, or check that your reference is in the MSA |
+| Very few primers after Step 1 | DECIPHER too strict for your alignment | Lower `decipher.min_coverage`, increase `decipher.max_permutations` (allow degeneracy), or widen `design` amplicon range |
+| All primers rejected in Step 2 | Tm or hairpin thresholds too tight | Widen `thermodynamics.tm_range`, soften `max_hairpin_dg` |
+| Pipeline runs but report shows no off-target hits | `-d` not supplied | Pass `-d path/to/fasta_dir` |
+| Slow run on a large MSA | Default workers = `cpu_count() - 1` | Cap with `--workers 4` if it's competing with other work, or raise `PRIMER_WORKERS` env var |
+
+---
+
+# Reference Documentation
 
 ## Usage
 
@@ -24,7 +201,7 @@ Evaluate existing primers instead of designing new ones:
 python Design.py -i alignment.fasta -g reference.gb -p my_primers.csv
 ```
 
-When `-p` is supplied, the design step is skipped and the supplied primers are used as the starting point. They pass through the same validation, analysis, and ranking as designed candidates. This makes the tool dual-purpose — it can design new primers or evaluate existing ones through the same analytical pipeline. The primers CSV must have columns `name`, `forward`, `reverse`.
+When `-p` is supplied, the design step is skipped and the supplied primers are used as the starting point. They pass through the same validation and analysis as designed candidates. This makes the tool dual-purpose — it can design new primers or evaluate existing ones through the same analytical pipeline. The primers CSV must have columns `name`, `forward`, `reverse`.
 
 Custom output directory:
 
@@ -35,7 +212,7 @@ python Design.py -i alignment.fasta -g reference.gb -o results/my_run
 Run with the included example data (11-species rodent mitogenome panel):
 
 ```bash
-python Design.py -i data/example/input/rodent_aligned.fasta -g data/example/input/NC_006914.1.gb
+python Design.py -i data/example/input/rodent_cytb_16S.fasta -g data/example/input/NC_006914.1.gb
 ```
 
 ### Arguments
@@ -75,11 +252,10 @@ Individual pipeline steps can be invoked separately using debug mode:
 
 ```bash
 python Design.py debug analyse -i alignment.fasta -d path/to/fasta_files
-python Design.py debug rank
 python Design.py debug report
 ```
 
-Available steps: `design`, `validate`, `expand`, `analyse`, `rank`, `report`.
+Available steps: `design`, `validate`, `expand`, `analyse`, `report`.
 
 ---
 
@@ -100,7 +276,7 @@ The pipeline requires one file, and optionally accepts up to three more:
 All outputs are written to the output directory (default `data/output/`):
 
 - **primers/** — CSV files at each stage: initial candidates, individually validated primers, expanded combinations.
-- **analysis/** — JSON file containing the complete analysis results (binding data, identity matrices, ecoPCR hits, annotations). Also contains the cached annotation mapping and the final ranked primers CSV.
+- **analysis/** — `results.json` with the complete analysis (binding data, identity matrices, ecoPCR hits, annotations), plus the cached annotation mapping.
 - **report.html** — An interactive HTML dashboard for visually comparing and selecting primer pairs.
 
 ---
@@ -111,7 +287,7 @@ All pipeline parameters are controlled through `data/config.yaml`. A custom conf
 
 **header** — Report title fields: main text, coloured species name, subtitle, and optional suffix. These populate the header bar in the HTML report.
 
-**design** — Primer length range, amplicon size range, and optimal amplicon size. The amplicon size range controls which primer combinations are considered viable in the expansion and analysis steps.
+**design** — Primer length range and amplicon size range. The amplicon size range controls which primer combinations are considered viable in the expansion and analysis steps.
 
 **decipher** — Parameters for the DECIPHER DesignSignatures algorithm: minimum coverage (fraction of MSA sequences a primer must bind), resolution (k-mer size for amplicon differentiation), maximum degeneracy (permutations per primer; 1 = no degenerate bases), `num_primer_sets` (number of final forward-reverse pairs returned per window — the top-scoring combinations), `search_primers` (number of individual candidate primer sequences DECIPHER evaluates per window — controls how broadly it explores binding sites before forming pairs), and sliding window parameters (`window_size`, `window_overlap`) for scanning long alignments.
 
@@ -120,8 +296,6 @@ All pipeline parameters are controlled through `data/config.yaml`. A custom conf
 **mismatches** — Separate mismatch tolerances for on-target binding (how forgiving the MSA analysis is) and off-target screening (how broadly the ecoPCR specificity search looks).
 
 **ecopcr** — Parameters for off-target screening: amplicon size range and whether to treat database sequences as circular.
-
-**ranking** — Weights for each of the five scoring components. These can be adjusted to prioritise different aspects of primer quality depending on the application. Weights must sum to 1.0.
 
 ---
 
@@ -218,17 +392,7 @@ Both binding analysis and off-target screening use obipcr from OBITools4, which 
 
 **Off-target screening (Step 4):** For every primer pair that successfully amplifies at least one sequence in the MSA, obipcr is run against the off-target sequence database with a separate mismatch tolerance.
 
-### Step 5 — Ranking and Selection
-
-Each primer pair is scored on five components, each normalised to a 0-1 scale:
-
-- **Binding universality** (configurable weight) — Fraction of MSA sequences amplified.
-- **Thermodynamic quality** (configurable weight) — Tm optimality, delta Tm, and secondary structure stability.
-- **Species resolution** (configurable weight) — Proportion of variable positions in the amplicon.
-- **Off-target specificity** (configurable weight) — Quality of ecoPCR hits.
-- **Amplicon size suitability** (configurable weight) — Closeness to optimal amplicon length.
-
-### Step 6 — Interactive Report
+### Step 5 — Interactive Report
 
 The analysis results are rendered as a self-contained HTML dashboard. The report includes:
 
